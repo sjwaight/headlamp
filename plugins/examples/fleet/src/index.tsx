@@ -55,6 +55,20 @@ const ClusterResourcePlacement = makeCustomResourceClass(
 );
 
 /**
+ * ResourcePlacement defines namespace-scoped placement policies.
+ * API: placement.kubernetes-fleet.io/v1beta1
+ */
+const ResourcePlacement = makeCustomResourceClass(
+  {
+    apiInfo: [{ group: 'placement.kubernetes-fleet.io', version: 'v1beta1' }],
+    kind: 'ResourcePlacement',
+    pluralName: 'resourceplacements',
+    singularName: 'resourceplacement',
+    isNamespaced: true,
+  } // namespace-scoped
+);
+
+/**
  * ClusterStagedUpdateStrategy defines a staged rollout strategy for fleet updates.
  * API: placement.kubernetes-fleet.io/v1alpha1
  */
@@ -231,30 +245,268 @@ function StagedResources() {
 }
 
 function PlacementPolicies() {
+  const [clusterPlacements] = ClusterResourcePlacement.useList();
+  const [resourcePlacements] = ResourcePlacement.useList();
+
+  const mergedPlacements =
+    clusterPlacements && resourcePlacements ? [...clusterPlacements, ...resourcePlacements] : null;
+
   return (
     <ResourceListView
       title="Placement Policies"
-      resourceClass={ClusterResourcePlacement}
+      data={mergedPlacements}
       columns={[
-        'name',
         {
-          label: 'Placement Type',
-          getValue: (item: any) => item.jsonData?.spec?.policy?.placementType ?? 'RoundRobin',
+          label: 'Name',
+          getValue: (item: any) => item.getName(),
+          render: (item: any) => {
+            const scope = getPlacementScope(item);
+            const name = item.getName();
+            const namespace = item.getNamespace?.();
+            const params =
+              scope === 'Namespace' && namespace
+                ? { scope: 'namespace', namespace, placementName: name }
+                : { scope: 'cluster', placementName: name };
+            const routeName =
+              scope === 'Namespace' && namespace
+                ? 'fleet-placement-policy-details-namespace'
+                : 'fleet-placement-policy-details-cluster';
+
+            return (
+              <Link routeName={routeName} params={params}>
+                {name}
+              </Link>
+            );
+          },
         },
         {
-          label: 'Cluster Count',
-          getValue: (item: any) => item.jsonData?.spec?.policy?.numberOfClusters ?? '-',
+          label: 'Scope',
+          getValue: (item: any) => item.getNamespace?.() || 'Cluster',
+          render: (item: any) => {
+            const namespace = item.getNamespace?.();
+
+            if (!namespace) {
+              return 'Cluster';
+            }
+
+            return (
+              <Link routeName="namespace" params={{ name: namespace }} activeCluster={item.cluster}>
+                {namespace}
+              </Link>
+            );
+          },
         },
         {
-          label: 'Scheduled',
-          getValue: (item: any) =>
-            item.jsonData?.status?.conditions?.find(
-              (c: any) => c.type === 'ClusterResourcePlacementScheduled'
-            )?.status ?? '-',
+          label: 'Policy',
+          getValue: (item: any) => getPlacementPolicyType(item),
         },
-        'age',
       ]}
     />
+  );
+}
+
+function getPlacementScope(item: any): 'Cluster' | 'Namespace' {
+  return item.getNamespace?.() ? 'Namespace' : 'Cluster';
+}
+
+function getPlacementPolicyType(item: any): string {
+  const policy = item?.jsonData?.spec?.policy;
+  const placementType = policy?.placementType;
+
+  if (typeof placementType === 'string' && placementType.length > 0) {
+    return placementType;
+  }
+
+  if (policy?.pickAll) {
+    return 'PickAll';
+  }
+
+  if (policy?.pickN) {
+    return 'PickN';
+  }
+
+  if (policy?.pickFixed) {
+    return 'PickFixed';
+  }
+
+  return '-';
+}
+
+function formatObjectSummary(data: Record<string, any> | undefined): string {
+  if (!data || typeof data !== 'object' || Object.keys(data).length === 0) {
+    return '-';
+  }
+
+  return Object.entries(data)
+    .map(([key, value]) => `${key}=${String(value)}`)
+    .join(', ');
+}
+
+function formatResourceSelectors(selectors: any[] | undefined): string {
+  if (!Array.isArray(selectors) || selectors.length === 0) {
+    return '-';
+  }
+
+  return selectors
+    .map(selector => {
+      const group = selector?.group ?? 'core';
+      const version = selector?.version ?? '-';
+      const kind = selector?.kind ?? '-';
+      const name = selector?.name ?? '*';
+      const namespace = selector?.namespace;
+
+      if (namespace) {
+        return `${group}/${version} ${kind} ${namespace}/${name}`;
+      }
+
+      return `${group}/${version} ${kind} ${name}`;
+    })
+    .join(' | ');
+}
+
+function formatPolicyDetails(item: any): string {
+  const policy = item?.jsonData?.spec?.policy;
+  if (!policy || typeof policy !== 'object') {
+    return '-';
+  }
+
+  if (policy.pickN) {
+    const numberOfClusters = policy.pickN?.numberOfClusters;
+    return numberOfClusters !== undefined && numberOfClusters !== null
+      ? `numberOfClusters=${numberOfClusters}`
+      : 'PickN';
+  }
+
+  if (policy.pickFixed) {
+    const clusterNames = policy.pickFixed?.clusterNames;
+    return Array.isArray(clusterNames) && clusterNames.length > 0
+      ? `clusterNames=${clusterNames.join(', ')}`
+      : 'PickFixed';
+  }
+
+  if (policy.pickAll) {
+    return 'All clusters matching selector';
+  }
+
+  return '-';
+}
+
+function formatConditions(conditions: any[] | undefined): string {
+  if (!Array.isArray(conditions) || conditions.length === 0) {
+    return '-';
+  }
+
+  return conditions
+    .map(condition => `${condition?.type ?? 'Unknown'}=${condition?.status ?? '-'}`)
+    .join(', ');
+}
+
+function ResourcePlacementDetails() {
+  const {
+    scope = '',
+    placementName = '',
+    namespace = '',
+  } = useParams<{
+    scope: string;
+    placementName: string;
+    namespace?: string;
+  }>();
+  const [clusterPlacement, clusterPlacementError] = ClusterResourcePlacement.useGet(placementName);
+  const [resourcePlacement, resourcePlacementError] = ResourcePlacement.useGet(
+    placementName,
+    namespace || undefined
+  );
+
+  const isNamespaceScope = scope === 'namespace';
+  const placement = isNamespaceScope ? resourcePlacement : clusterPlacement;
+  const placementError = isNamespaceScope ? resourcePlacementError : clusterPlacementError;
+
+  if (!placement && !placementError) {
+    return (
+      <SectionBox title={`Resource Placement: ${placementName}`}>
+        <Loader title="Loading placement details" />
+      </SectionBox>
+    );
+  }
+
+  if (placementError) {
+    return (
+      <SectionBox title={`Resource Placement: ${placementName}`}>
+        <div>Unable to load placement details: {placementError.message}</div>
+      </SectionBox>
+    );
+  }
+
+  if (!placement) {
+    const scopedName =
+      isNamespaceScope && namespace ? `${namespace}/${placementName}` : placementName;
+    return (
+      <SectionBox title={`Resource Placement: ${scopedName}`}>
+        <div>Placement not found.</div>
+      </SectionBox>
+    );
+  }
+
+  const placementScope = getPlacementScope(placement);
+  const metadata = placement.jsonData?.metadata;
+  const spec = placement.jsonData?.spec;
+  const status = placement.jsonData?.status;
+
+  return (
+    <SectionBox title={`Resource Placement: ${placement.getName()}`}>
+      <div style={{ display: 'grid', gap: '0.8rem' }}>
+        <div>
+          <strong>Name:</strong> {placement.getName()}
+        </div>
+        <div>
+          <strong>Scope:</strong> {placementScope}
+        </div>
+        {placementScope === 'Namespace' && (
+          <div>
+            <strong>Namespace:</strong> {placement.getNamespace?.() ?? '-'}
+          </div>
+        )}
+        <div>
+          <strong>Policy:</strong> {getPlacementPolicyType(placement)}
+        </div>
+        <div>
+          <strong>Policy Details:</strong> {formatPolicyDetails(placement)}
+        </div>
+        <div>
+          <strong>Resource Selectors:</strong> {formatResourceSelectors(spec?.resourceSelectors)}
+        </div>
+        <div>
+          <strong>Cluster Names:</strong>{' '}
+          {Array.isArray(status?.targetClusters) && status.targetClusters.length > 0
+            ? status.targetClusters.join(', ')
+            : '-'}
+        </div>
+        <div>
+          <strong>Conditions:</strong> {formatConditions(status?.conditions)}
+        </div>
+        <div>
+          <strong>Labels:</strong> {formatObjectSummary(metadata?.labels)}
+        </div>
+        <div>
+          <strong>Annotations:</strong> {formatObjectSummary(metadata?.annotations)}
+        </div>
+        <div>
+          <strong>Manifest:</strong>
+          <pre
+            style={{
+              marginTop: '0.4rem',
+              padding: '0.75rem',
+              borderRadius: '8px',
+              maxHeight: '24rem',
+              overflow: 'auto',
+              background: 'rgba(127,127,127,0.08)',
+            }}
+          >
+            {JSON.stringify(placement.jsonData, null, 2)}
+          </pre>
+        </div>
+      </div>
+    </SectionBox>
   );
 }
 
@@ -513,6 +765,22 @@ registerRoute({
   name: 'fleet-placement-policies',
   exact: true,
   component: PlacementPolicies,
+});
+
+registerRoute({
+  path: '/fleet/placement-policies/:scope/:placementName',
+  sidebar: 'fleet-placement-policies',
+  name: 'fleet-placement-policy-details-cluster',
+  exact: true,
+  component: ResourcePlacementDetails,
+});
+
+registerRoute({
+  path: '/fleet/placement-policies/:scope/:namespace/:placementName',
+  sidebar: 'fleet-placement-policies',
+  name: 'fleet-placement-policy-details-namespace',
+  exact: true,
+  component: ResourcePlacementDetails,
 });
 
 registerRoute({
