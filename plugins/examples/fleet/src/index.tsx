@@ -15,8 +15,14 @@
  */
 
 import { K8s, registerRoute, registerSidebarEntry } from '@kinvolk/headlamp-plugin/lib';
-import { ResourceListView } from '@kinvolk/headlamp-plugin/lib/CommonComponents';
+import {
+  Link,
+  Loader,
+  ResourceListView,
+  SectionBox,
+} from '@kinvolk/headlamp-plugin/lib/CommonComponents';
 import { makeCustomResourceClass } from '@kinvolk/headlamp-plugin/lib/Crd';
+import { useParams } from 'react-router-dom';
 
 // ─── Custom Resource Classes ──────────────────────────────────────────────────
 
@@ -25,8 +31,13 @@ import { makeCustomResourceClass } from '@kinvolk/headlamp-plugin/lib/Crd';
  * API: cluster.kubernetes-fleet.io/v1
  */
 const MemberCluster = makeCustomResourceClass(
-  [['cluster.kubernetes-fleet.io', 'v1', 'memberclusters']],
-  false // cluster-scoped
+  {
+    apiInfo: [{ group: 'cluster.kubernetes-fleet.io', version: 'v1' }],
+    kind: 'MemberCluster',
+    pluralName: 'memberclusters',
+    singularName: 'membercluster',
+    isNamespaced: false,
+  } // cluster-scoped
 );
 
 /**
@@ -34,8 +45,13 @@ const MemberCluster = makeCustomResourceClass(
  * API: placement.kubernetes-fleet.io/v1beta1
  */
 const ClusterResourcePlacement = makeCustomResourceClass(
-  [['placement.kubernetes-fleet.io', 'v1beta1', 'clusterresourceplacements']],
-  false // cluster-scoped
+  {
+    apiInfo: [{ group: 'placement.kubernetes-fleet.io', version: 'v1beta1' }],
+    kind: 'ClusterResourcePlacement',
+    pluralName: 'clusterresourceplacements',
+    singularName: 'clusterresourceplacement',
+    isNamespaced: false,
+  } // cluster-scoped
 );
 
 /**
@@ -43,8 +59,16 @@ const ClusterResourcePlacement = makeCustomResourceClass(
  * API: placement.kubernetes-fleet.io/v1alpha1
  */
 const ClusterStagedUpdateStrategy = makeCustomResourceClass(
-  [['placement.kubernetes-fleet.io', 'v1alpha1', 'clusterstagedupdatestrategies']],
-  false // cluster-scoped
+  {
+    apiInfo: [
+      { group: 'placement.kubernetes-fleet.io', version: 'v1' },
+      { group: 'placement.kubernetes-fleet.io', version: 'v1alpha1' },
+    ],
+    kind: 'ClusterStagedUpdateStrategy',
+    pluralName: 'clusterstagedupdatestrategies',
+    singularName: 'clusterstagedupdatestrategy',
+    isNamespaced: false,
+  } // cluster-scoped
 );
 
 /**
@@ -52,8 +76,16 @@ const ClusterStagedUpdateStrategy = makeCustomResourceClass(
  * API: placement.kubernetes-fleet.io/v1alpha1
  */
 const ClusterStagedUpdateRun = makeCustomResourceClass(
-  [['placement.kubernetes-fleet.io', 'v1alpha1', 'clusterstagedupdateruns']],
-  false // cluster-scoped
+  {
+    apiInfo: [
+      { group: 'placement.kubernetes-fleet.io', version: 'v1' },
+      { group: 'placement.kubernetes-fleet.io', version: 'v1alpha1' },
+    ],
+    kind: 'ClusterStagedUpdateRun',
+    pluralName: 'clusterstagedupdateruns',
+    singularName: 'clusterstagedupdaterun',
+    isNamespaced: false,
+  } // cluster-scoped
 );
 
 // ─── Sidebar ──────────────────────────────────────────────────────────────────
@@ -104,31 +136,65 @@ registerSidebarEntry({
 // ─── Views ────────────────────────────────────────────────────────────────────
 
 function MemberClusters() {
+  const formatMetadataMap = (metadataMap: Record<string, string> | undefined) => {
+    if (!metadataMap || Object.keys(metadataMap).length === 0) {
+      return '-';
+    }
+
+    return Object.entries(metadataMap)
+      .map(([key, value]) => `${key}=${value}`)
+      .join(', ');
+  };
+
   return (
     <ResourceListView
       title="Member Clusters"
       resourceClass={MemberCluster}
       columns={[
-        'name',
+        {
+          label: 'Member Name',
+          gridTemplate: 'min-content',
+          getValue: (item: any) => item.getName(),
+          render: (item: any) => {
+            const clusterName = item.getName();
+            return (
+              <Link routeName="cluster" params={{ cluster: clusterName }}>
+                {clusterName}
+              </Link>
+            );
+          },
+        },
         {
           label: 'Joined',
+          gridTemplate: 'min-content',
           getValue: (item: any) =>
             item.jsonData?.status?.conditions?.find((c: any) => c.type === 'Joined')?.status ?? '-',
         },
         {
-          label: 'Health State',
-          getValue: (item: any) =>
-            item.jsonData?.status?.conditions?.find((c: any) => c.type === 'ConditionTypeHealthy')
-              ?.status ?? '-',
-        },
-        {
-          label: 'Agent Status',
+          label: 'Kubernetes',
+          gridTemplate: 'min-content',
           getValue: (item: any) => {
-            const agents: any[] = item.jsonData?.status?.agentStatus ?? [];
-            return agents.map((a: any) => a.type).join(', ') || '-';
+            const versionProperty = item.jsonData?.status?.properties?.['k8s.io/k8s-version'];
+
+            if (typeof versionProperty === 'string') {
+              return versionProperty;
+            }
+
+            if (typeof versionProperty?.value === 'string') {
+              return versionProperty.value;
+            }
+
+            return '-';
           },
         },
-        'age',
+        {
+          label: 'Labels',
+          getValue: (item: any) => formatMetadataMap(item.jsonData?.metadata?.labels),
+        },
+        {
+          label: 'Annotations',
+          getValue: (item: any) => formatMetadataMap(item.jsonData?.metadata?.annotations),
+        },
       ]}
     />
   );
@@ -140,7 +206,12 @@ function StagedResources() {
   const filteredNamespaces =
     namespaces?.filter(namespace => {
       const name = namespace.getName();
-      return name !== 'default' && name !== 'fleet-system' && !name.startsWith('kube-');
+      return (
+        name !== 'default' &&
+        name !== 'fleet-system' &&
+        !name.startsWith('kube-') &&
+        !name.startsWith('fleet-member-')
+      );
     }) ?? null;
 
   return (
@@ -168,13 +239,11 @@ function PlacementPolicies() {
         'name',
         {
           label: 'Placement Type',
-          getValue: (item: any) =>
-            item.jsonData?.spec?.policy?.placementType ?? 'RoundRobin',
+          getValue: (item: any) => item.jsonData?.spec?.policy?.placementType ?? 'RoundRobin',
         },
         {
           label: 'Cluster Count',
-          getValue: (item: any) =>
-            item.jsonData?.spec?.policy?.numberOfClusters ?? '-',
+          getValue: (item: any) => item.jsonData?.spec?.policy?.numberOfClusters ?? '-',
         },
         {
           label: 'Scheduled',
@@ -195,7 +264,19 @@ function RolloutStrategies() {
       title="Rollout Strategies"
       resourceClass={ClusterStagedUpdateStrategy}
       columns={[
-        'name',
+        {
+          label: 'Name',
+          getValue: (item: any) => item.getName(),
+          render: (item: any) => {
+            const strategyName = item.getName();
+
+            return (
+              <Link routeName="fleet-rollout-strategy-details" params={{ strategyName }}>
+                {strategyName}
+              </Link>
+            );
+          },
+        },
         {
           label: 'Stage Count',
           getValue: (item: any) => item.jsonData?.spec?.stages?.length ?? 0,
@@ -211,6 +292,169 @@ function RolloutStrategies() {
         'age',
       ]}
     />
+  );
+}
+
+function formatLabelSelector(stage: any): string {
+  const matchLabels =
+    stage?.labelSelector?.matchLabels ??
+    stage?.clusterSelector?.matchLabels ??
+    stage?.clusterSelector?.labelSelector?.matchLabels ??
+    stage?.placement?.clusterSelector?.matchLabels ??
+    stage?.placement?.clusterSelector?.labelSelector?.matchLabels;
+
+  if (!matchLabels || typeof matchLabels !== 'object' || Object.keys(matchLabels).length === 0) {
+    return '-';
+  }
+
+  return Object.entries(matchLabels)
+    .map(([key, value]) => `${key}=${String(value)}`)
+    .join(', ');
+}
+
+function getTaskType(task: any): string {
+  if (typeof task?.type === 'string') {
+    return task.type;
+  }
+
+  if (task?.approval || task?.Approval) {
+    return 'Approval';
+  }
+
+  if (task?.timedWait || task?.TimedWait) {
+    return 'TimedWait';
+  }
+
+  return 'Unknown';
+}
+
+function renderTask(task: any, index: number) {
+  const taskType = getTaskType(task);
+  const taskLabel = task?.name ? `${taskType} – ${task.name}` : taskType;
+
+  if (taskType === 'TimedWait') {
+    // Prefer the raw YAML string (e.g. "5m", "30s"); fall back to numeric seconds field.
+    const waitTime = task?.timedWait?.waitTime ?? task?.TimedWait?.waitTime ?? task?.waitTime;
+    const waitTimeFallback =
+      task?.timedWait?.waitTimeSeconds ??
+      task?.TimedWait?.waitTimeSeconds ??
+      task?.waitTimeSeconds ??
+      task?.waitSeconds ??
+      task?.durationSeconds;
+    const displayValue =
+      waitTime !== undefined && waitTime !== null
+        ? String(waitTime)
+        : waitTimeFallback !== undefined && waitTimeFallback !== null
+        ? String(waitTimeFallback)
+        : null;
+
+    return (
+      <div key={index} style={{ marginLeft: '0.75rem' }}>
+        <strong>{taskLabel}</strong>
+        {displayValue !== null && (
+          <div style={{ marginLeft: '0.75rem' }}>Wait Time: {displayValue}</div>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div key={index} style={{ marginLeft: '0.75rem' }}>
+      <strong>{taskLabel}</strong>
+    </div>
+  );
+}
+
+function renderTaskList(tasks: any[] | undefined) {
+  if (!Array.isArray(tasks) || tasks.length === 0) {
+    return <span>None</span>;
+  }
+
+  return (
+    <div style={{ display: 'grid', gap: '0.2rem', marginTop: '0.15rem' }}>
+      {tasks.map((task, index) => renderTask(task, index))}
+    </div>
+  );
+}
+
+function formatMaxConcurrency(stage: any): string {
+  const maxConcurrency = stage?.maxConcurrency;
+  if (maxConcurrency === undefined || maxConcurrency === null) {
+    return 'None';
+  }
+
+  return String(maxConcurrency);
+}
+
+function RolloutStrategyDetails() {
+  const { strategyName = '' } = useParams<{ strategyName: string }>();
+  const [strategy, error] = ClusterStagedUpdateStrategy.useGet(strategyName);
+
+  if (!strategy && !error) {
+    return (
+      <SectionBox title={`Rollout Strategy: ${strategyName}`}>
+        <Loader title="Loading strategy details" />
+      </SectionBox>
+    );
+  }
+
+  if (error) {
+    return (
+      <SectionBox title={`Rollout Strategy: ${strategyName}`}>
+        <div>Unable to load strategy details: {error.message}</div>
+      </SectionBox>
+    );
+  }
+
+  const strategyData = strategy?.jsonData;
+  const stages: any[] = strategyData?.spec?.stages ?? [];
+
+  return (
+    <SectionBox title={`Rollout Strategy: ${strategyName}`}>
+      <div style={{ marginBottom: '1rem', opacity: 0.85 }}>
+        Visual sequence of rollout stages, including cluster selectors, stage tasks, and concurrency
+        limits.
+      </div>
+
+      {stages.length === 0 ? (
+        <div>No stages are defined for this strategy.</div>
+      ) : (
+        <div style={{ display: 'grid', gap: '0.75rem' }}>
+          {stages.map((stage, index) => (
+            <div
+              key={stage?.name ?? `stage-${index}`}
+              style={{
+                border: '1px solid rgba(127,127,127,0.35)',
+                borderRadius: '8px',
+                padding: '0.9rem',
+                background: 'rgba(127,127,127,0.06)',
+              }}
+            >
+              <div style={{ fontWeight: 700, marginBottom: '0.4rem' }}>
+                Stage {index + 1}: {stage?.name ?? 'Unnamed stage'}
+              </div>
+              <div style={{ display: 'grid', gap: '0.35rem' }}>
+                <div>
+                  <strong>Cluster Selector Labels:</strong> {formatLabelSelector(stage)}
+                </div>
+                <div>
+                  <strong>Sorting Label Key:</strong> {stage?.sortingLabelKey ?? 'none'}
+                </div>
+                <div>
+                  <strong>Before Stage Tasks:</strong> {renderTaskList(stage?.beforeStageTasks)}
+                </div>
+                <div>
+                  <strong>After Stage Tasks:</strong> {renderTaskList(stage?.afterStageTasks)}
+                </div>
+                <div>
+                  <strong>Max Concurrency:</strong> {formatMaxConcurrency(stage)}
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </SectionBox>
   );
 }
 
@@ -277,6 +521,14 @@ registerRoute({
   name: 'fleet-rollout-strategies',
   exact: true,
   component: RolloutStrategies,
+});
+
+registerRoute({
+  path: '/fleet/rollout-strategies/:strategyName',
+  sidebar: 'fleet-rollout-strategies',
+  name: 'fleet-rollout-strategy-details',
+  exact: true,
+  component: RolloutStrategyDetails,
 });
 
 registerRoute({
