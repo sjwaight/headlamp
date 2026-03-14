@@ -122,14 +122,14 @@ registerSidebarEntry({
 registerSidebarEntry({
   parent: 'fleet',
   name: 'fleet-rollout-strategies',
-  label: 'Rollout Strategies',
+  label: 'Staged Rollout Strategies',
   url: '/fleet/rollout-strategies',
 });
 
 registerSidebarEntry({
   parent: 'fleet',
   name: 'fleet-rollout-runs',
-  label: 'Rollout Runs',
+  label: 'Staged Rollout Runs',
   url: '/fleet/rollout-runs',
 });
 
