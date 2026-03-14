@@ -16,10 +16,12 @@
 
 import { K8s, registerRoute, registerSidebarEntry } from '@kinvolk/headlamp-plugin/lib';
 import {
+  DetailsGrid,
   Link,
   Loader,
   ResourceListView,
   SectionBox,
+  SimpleTable,
 } from '@kinvolk/headlamp-plugin/lib/CommonComponents';
 import { makeCustomResourceClass } from '@kinvolk/headlamp-plugin/lib/Crd';
 import { useParams } from 'react-router-dom';
@@ -342,26 +344,12 @@ function formatObjectSummary(data: Record<string, any> | undefined): string {
     .join(', ');
 }
 
-function formatResourceSelectors(selectors: any[] | undefined): string {
-  if (!Array.isArray(selectors) || selectors.length === 0) {
-    return '-';
+function getResourceSelectors(selectors: any[] | undefined): any[] {
+  if (!Array.isArray(selectors)) {
+    return [];
   }
 
-  return selectors
-    .map(selector => {
-      const group = selector?.group ?? 'core';
-      const version = selector?.version ?? '-';
-      const kind = selector?.kind ?? '-';
-      const name = selector?.name ?? '*';
-      const namespace = selector?.namespace;
-
-      if (namespace) {
-        return `${group}/${version} ${kind} ${namespace}/${name}`;
-      }
-
-      return `${group}/${version} ${kind} ${name}`;
-    })
-    .join(' | ');
+  return selectors;
 }
 
 function formatPolicyDetails(item: any): string {
@@ -411,102 +399,107 @@ function ResourcePlacementDetails() {
     placementName: string;
     namespace?: string;
   }>();
-  const [clusterPlacement, clusterPlacementError] = ClusterResourcePlacement.useGet(placementName);
-  const [resourcePlacement, resourcePlacementError] = ResourcePlacement.useGet(
-    placementName,
-    namespace || undefined
-  );
-
   const isNamespaceScope = scope === 'namespace';
-  const placement = isNamespaceScope ? resourcePlacement : clusterPlacement;
-  const placementError = isNamespaceScope ? resourcePlacementError : clusterPlacementError;
-
-  if (!placement && !placementError) {
-    return (
-      <SectionBox title={`Resource Placement: ${placementName}`}>
-        <Loader title="Loading placement details" />
-      </SectionBox>
-    );
-  }
-
-  if (placementError) {
-    return (
-      <SectionBox title={`Resource Placement: ${placementName}`}>
-        <div>Unable to load placement details: {placementError.message}</div>
-      </SectionBox>
-    );
-  }
-
-  if (!placement) {
-    const scopedName =
-      isNamespaceScope && namespace ? `${namespace}/${placementName}` : placementName;
-    return (
-      <SectionBox title={`Resource Placement: ${scopedName}`}>
-        <div>Placement not found.</div>
-      </SectionBox>
-    );
-  }
-
-  const placementScope = getPlacementScope(placement);
-  const metadata = placement.jsonData?.metadata;
-  const spec = placement.jsonData?.spec;
-  const status = placement.jsonData?.status;
+  const resourceType = isNamespaceScope ? ResourcePlacement : ClusterResourcePlacement;
+  const detailsNamespace = isNamespaceScope ? namespace || undefined : undefined;
 
   return (
-    <SectionBox title={`Resource Placement: ${placement.getName()}`}>
-      <div style={{ display: 'grid', gap: '0.8rem' }}>
-        <div>
-          <strong>Name:</strong> {placement.getName()}
-        </div>
-        <div>
-          <strong>Scope:</strong> {placementScope}
-        </div>
-        {placementScope === 'Namespace' && (
-          <div>
-            <strong>Namespace:</strong> {placement.getNamespace?.() ?? '-'}
-          </div>
-        )}
-        <div>
-          <strong>Policy:</strong> {getPlacementPolicyType(placement)}
-        </div>
-        <div>
-          <strong>Policy Details:</strong> {formatPolicyDetails(placement)}
-        </div>
-        <div>
-          <strong>Resource Selectors:</strong> {formatResourceSelectors(spec?.resourceSelectors)}
-        </div>
-        <div>
-          <strong>Cluster Names:</strong>{' '}
-          {Array.isArray(status?.targetClusters) && status.targetClusters.length > 0
-            ? status.targetClusters.join(', ')
-            : '-'}
-        </div>
-        <div>
-          <strong>Conditions:</strong> {formatConditions(status?.conditions)}
-        </div>
-        <div>
-          <strong>Labels:</strong> {formatObjectSummary(metadata?.labels)}
-        </div>
-        <div>
-          <strong>Annotations:</strong> {formatObjectSummary(metadata?.annotations)}
-        </div>
-        <div>
-          <strong>Manifest:</strong>
-          <pre
-            style={{
-              marginTop: '0.4rem',
-              padding: '0.75rem',
-              borderRadius: '8px',
-              maxHeight: '24rem',
-              overflow: 'auto',
-              background: 'rgba(127,127,127,0.08)',
-            }}
-          >
-            {JSON.stringify(placement.jsonData, null, 2)}
-          </pre>
-        </div>
-      </div>
-    </SectionBox>
+    <DetailsGrid
+      resourceType={resourceType}
+      name={placementName}
+      namespace={detailsNamespace}
+      withEvents
+      extraInfo={(item: any) =>
+        item && [
+          {
+            name: 'Scope',
+            value: item.getNamespace?.() || 'Cluster',
+          },
+          {
+            name: 'Policy',
+            value: getPlacementPolicyType(item),
+          },
+          {
+            name: 'Policy Details',
+            value: formatPolicyDetails(item),
+          },
+          {
+            name: 'Cluster Names',
+            value:
+              Array.isArray(item.jsonData?.status?.targetClusters) &&
+              item.jsonData.status.targetClusters.length > 0
+                ? item.jsonData.status.targetClusters.join(', ')
+                : '-',
+          },
+          {
+            name: 'Conditions',
+            value: formatConditions(item.jsonData?.status?.conditions),
+          },
+          {
+            name: 'Labels',
+            value: formatObjectSummary(item.jsonData?.metadata?.labels),
+          },
+          {
+            name: 'Annotations',
+            value: formatObjectSummary(item.jsonData?.metadata?.annotations),
+          },
+        ]
+      }
+      extraSections={(item: any) => [
+        {
+          id: 'fleet.resource-placement-selected-resources',
+          section: (
+            <SectionBox title="Selected Resources">
+              <SimpleTable
+                data={getResourceSelectors(item?.jsonData?.spec?.resourceSelectors)}
+                columns={[
+                  {
+                    label: 'name',
+                    getter: (selector: any) => selector?.name ?? '-',
+                  },
+                  {
+                    label: 'kind',
+                    getter: (selector: any) => selector?.kind ?? '-',
+                  },
+                  {
+                    label: 'version',
+                    getter: (selector: any) => selector?.version ?? '-',
+                  },
+                  {
+                    label: 'group',
+                    getter: (selector: any) => selector?.group ?? '-',
+                  },
+                  {
+                    label: 'selectionScope',
+                    getter: (selector: any) => selector?.selectionScope ?? '-',
+                  },
+                ]}
+                emptyMessage="No resource selectors defined."
+              />
+            </SectionBox>
+          ),
+        },
+        {
+          id: 'fleet.resource-placement-manifest',
+          section: (
+            <SectionBox title="Manifest">
+              <pre
+                style={{
+                  marginTop: '0.4rem',
+                  padding: '0.75rem',
+                  borderRadius: '8px',
+                  maxHeight: '24rem',
+                  overflow: 'auto',
+                  background: 'rgba(127,127,127,0.08)',
+                }}
+              >
+                {JSON.stringify(item?.jsonData, null, 2)}
+              </pre>
+            </SectionBox>
+          ),
+        },
+      ]}
+    />
   );
 }
 
