@@ -14,16 +14,20 @@
  * limitations under the License.
  */
 
+import { Icon } from '@iconify/react';
 import { K8s, registerRoute, registerSidebarEntry } from '@kinvolk/headlamp-plugin/lib';
 import {
   DetailsGrid,
+  LightTooltip,
   Link,
   Loader,
   ResourceListView,
   SectionBox,
   SimpleTable,
+  StatusLabel,
 } from '@kinvolk/headlamp-plugin/lib/CommonComponents';
 import { makeCustomResourceClass } from '@kinvolk/headlamp-plugin/lib/Crd';
+import Box from '@mui/material/Box';
 import { useParams } from 'react-router-dom';
 
 // ─── Custom Resource Classes ──────────────────────────────────────────────────
@@ -102,6 +106,23 @@ const ClusterStagedUpdateRun = makeCustomResourceClass(
     singularName: 'clusterstagedupdaterun',
     isNamespaced: false,
   } // cluster-scoped
+);
+
+/**
+ * StagedUpdateRun tracks a staged rollout execution in a namespace.
+ * API: placement.kubernetes-fleet.io/v1alpha1
+ */
+const StagedUpdateRun = makeCustomResourceClass(
+  {
+    apiInfo: [
+      { group: 'placement.kubernetes-fleet.io', version: 'v1' },
+      { group: 'placement.kubernetes-fleet.io', version: 'v1alpha1' },
+    ],
+    kind: 'StagedUpdateRun',
+    pluralName: 'stagedupdateruns',
+    singularName: 'stagedupdaterun',
+    isNamespaced: true,
+  } // namespace-scoped
 );
 
 // ─── Sidebar ──────────────────────────────────────────────────────────────────
@@ -302,6 +323,10 @@ function PlacementPolicies() {
           label: 'Policy',
           getValue: (item: any) => getPlacementPolicyType(item),
         },
+        {
+          label: 'Rollout Strategy',
+          getValue: (item: any) => getPlacementStrategyType(item),
+        },
       ]}
     />
   );
@@ -332,6 +357,26 @@ function getPlacementPolicyType(item: any): string {
   }
 
   return '-';
+}
+
+function getPlacementStrategyType(item: any): 'RollingUpdate' | 'External' {
+  const strategy = item?.jsonData?.spec?.strategy;
+
+  if (!strategy) {
+    return 'RollingUpdate';
+  }
+
+  const strategyType = String(strategy?.type || '').toLowerCase();
+
+  if (strategyType.includes('external') || strategy?.external) {
+    return 'External';
+  }
+
+  if (strategyType.includes('rolling') || strategy?.rollingUpdate) {
+    return 'RollingUpdate';
+  }
+
+  return 'RollingUpdate';
 }
 
 function formatObjectSummary(data: Record<string, any> | undefined): string {
@@ -631,6 +676,167 @@ function formatMaxConcurrency(stage: any): string {
   return String(maxConcurrency);
 }
 
+function getRolloutRunStatusDisplay(item: any): {
+  label: string;
+  status: 'success' | 'warning' | 'error' | '';
+  detailedStatus: string;
+} {
+  const rawStatus = String(item?.jsonData?.spec?.State ?? item?.jsonData?.spec?.state ?? '').trim();
+  const normalizedStatus = rawStatus.toLowerCase();
+  const conditions = item?.jsonData?.status?.conditions;
+  const detailedStatus = Array.isArray(conditions)
+    ? conditions
+        .map((condition: any) => {
+          const conditionType = condition?.type ?? 'Unknown';
+          const conditionStatus = condition?.status ?? '-';
+          const reason = condition?.reason ? ` (${condition.reason})` : '';
+          const message = condition?.message ? `: ${condition.message}` : '';
+
+          return `${conditionType}=${conditionStatus}${reason}${message}`;
+        })
+        .join('\n')
+    : rawStatus || 'Unknown';
+
+  if (normalizedStatus === 'initialized') {
+    return { label: 'Created', status: 'success', detailedStatus };
+  }
+
+  if (normalizedStatus === 'run') {
+    return { label: 'Running', status: 'success', detailedStatus };
+  }
+
+  if (normalizedStatus === 'stop') {
+    return { label: 'Stopped', status: 'warning', detailedStatus };
+  }
+
+  return {
+    label: rawStatus || '-',
+    status: rawStatus ? 'error' : '',
+    detailedStatus,
+  };
+}
+
+function makeRolloutRunStatusLabel(item: any) {
+  const statusDisplay = getRolloutRunStatusDisplay(item);
+
+  if (statusDisplay.label === '-') {
+    return '-';
+  }
+
+  return (
+    <Box display="flex" alignItems="center" gap={1}>
+      <LightTooltip title={statusDisplay.detailedStatus} interactive>
+        <Box display="inline">
+          <StatusLabel status={statusDisplay.status}>
+            {(statusDisplay.status === 'warning' || statusDisplay.status === 'error') && (
+              <Icon aria-label="hidden" icon="mdi:alert-outline" width="1.2rem" height="1.2rem" />
+            )}
+            {statusDisplay.label}
+          </StatusLabel>
+        </Box>
+      </LightTooltip>
+    </Box>
+  );
+}
+
+function getRolloutRunScope(item: any): 'Cluster' | 'Namespace' {
+  return item.getNamespace?.() ? 'Namespace' : 'Cluster';
+}
+
+function RolloutRunDetails() {
+  const {
+    scope = '',
+    runName = '',
+    namespace = '',
+  } = useParams<{
+    scope: string;
+    runName: string;
+    namespace?: string;
+  }>();
+  const isNamespaceScope = scope === 'namespace';
+  const resourceType = isNamespaceScope ? StagedUpdateRun : ClusterStagedUpdateRun;
+  const detailsNamespace = isNamespaceScope ? namespace || undefined : undefined;
+
+  return (
+    <DetailsGrid
+      resourceType={resourceType}
+      name={runName}
+      namespace={detailsNamespace}
+      extraInfo={(item: any) =>
+        item && [
+          {
+            name: 'Scope',
+            value: getRolloutRunScope(item) === 'Namespace' ? item.getNamespace?.() : 'Cluster',
+          },
+          {
+            name: 'Placement',
+            value: item.jsonData?.spec?.placementName ?? '-',
+          },
+          {
+            name: 'Strategy',
+            value: item.jsonData?.spec?.stagedUpdateStrategySnapshot?.name ?? '-',
+          },
+          {
+            name: 'Current Stage',
+            value: item.jsonData?.status?.stageName ?? '-',
+          },
+          {
+            name: 'Status',
+            value: makeRolloutRunStatusLabel(item),
+          },
+          {
+            name: 'Conditions',
+            value: formatConditions(item.jsonData?.status?.conditions),
+          },
+          {
+            name: 'Labels',
+            value: formatObjectSummary(item.jsonData?.metadata?.labels),
+          },
+          {
+            name: 'Annotations',
+            value: formatObjectSummary(item.jsonData?.metadata?.annotations),
+          },
+        ]
+      }
+      extraSections={(item: any) => [
+        {
+          id: 'fleet.rollout-run-conditions',
+          section: (
+            <SectionBox title="Conditions">
+              <SimpleTable
+                data={item?.jsonData?.status?.conditions ?? []}
+                columns={[
+                  {
+                    label: 'Type',
+                    getter: (condition: any) => condition?.type ?? '-',
+                  },
+                  {
+                    label: 'Status',
+                    getter: (condition: any) => condition?.status ?? '-',
+                  },
+                  {
+                    label: 'Reason',
+                    getter: (condition: any) => condition?.reason ?? '-',
+                  },
+                  {
+                    label: 'Message',
+                    getter: (condition: any) => condition?.message ?? '-',
+                  },
+                  {
+                    label: 'Last Transition Time',
+                    getter: (condition: any) => condition?.lastTransitionTime ?? '-',
+                  },
+                ]}
+                emptyMessage="No conditions found."
+              />
+            </SectionBox>
+          ),
+        },
+      ]}
+    />
+  );
+}
+
 function RolloutStrategyDetails() {
   const { strategyName = '' } = useParams<{ strategyName: string }>();
   const [strategy, error] = ClusterStagedUpdateStrategy.useGet(strategyName);
@@ -704,12 +910,57 @@ function RolloutStrategyDetails() {
 }
 
 function RolloutRuns() {
+  const [clusterRolloutRuns] = ClusterStagedUpdateRun.useList();
+  const [rolloutRuns] = StagedUpdateRun.useList();
+
+  const mergedRolloutRuns =
+    clusterRolloutRuns && rolloutRuns ? [...clusterRolloutRuns, ...rolloutRuns] : null;
+
   return (
     <ResourceListView
       title="Rollout Runs"
-      resourceClass={ClusterStagedUpdateRun}
+      data={mergedRolloutRuns}
       columns={[
-        'name',
+        {
+          label: 'Name',
+          getValue: (item: any) => item.getName(),
+          render: (item: any) => {
+            const scope = getRolloutRunScope(item);
+            const name = item.getName();
+            const namespace = item.getNamespace?.();
+            const params =
+              scope === 'Namespace' && namespace
+                ? { scope: 'namespace', namespace, runName: name }
+                : { scope: 'cluster', runName: name };
+            const routeName =
+              scope === 'Namespace' && namespace
+                ? 'fleet-rollout-run-details-namespace'
+                : 'fleet-rollout-run-details-cluster';
+
+            return (
+              <Link routeName={routeName} params={params}>
+                {name}
+              </Link>
+            );
+          },
+        },
+        {
+          label: 'Scope',
+          getValue: (item: any) => item.getNamespace?.() || 'Cluster',
+          render: (item: any) => {
+            const namespace = item.getNamespace?.();
+
+            if (!namespace) {
+              return 'Cluster';
+            }
+
+            return (
+              <Link routeName="namespace" params={{ name: namespace }} activeCluster={item.cluster}>
+                {namespace}
+              </Link>
+            );
+          },
+        },
         {
           label: 'Placement',
           getValue: (item: any) => item.jsonData?.spec?.placementName ?? '-',
@@ -723,10 +974,9 @@ function RolloutRuns() {
           getValue: (item: any) => item.jsonData?.status?.stageName ?? '-',
         },
         {
-          label: 'Succeeded',
-          getValue: (item: any) =>
-            item.jsonData?.status?.conditions?.find((c: any) => c.type === 'Succeeded')?.status ??
-            '-',
+          label: 'Status',
+          getValue: (item: any) => getRolloutRunStatusDisplay(item).label,
+          render: (item: any) => makeRolloutRunStatusLabel(item),
         },
         'age',
       ]}
@@ -798,4 +1048,20 @@ registerRoute({
   name: 'fleet-rollout-runs',
   exact: true,
   component: RolloutRuns,
+});
+
+registerRoute({
+  path: '/fleet/rollout-runs/:scope/:runName',
+  sidebar: 'fleet-rollout-runs',
+  name: 'fleet-rollout-run-details-cluster',
+  exact: true,
+  component: RolloutRunDetails,
+});
+
+registerRoute({
+  path: '/fleet/rollout-runs/:scope/:namespace/:runName',
+  sidebar: 'fleet-rollout-runs',
+  name: 'fleet-rollout-run-details-namespace',
+  exact: true,
+  component: RolloutRunDetails,
 });
