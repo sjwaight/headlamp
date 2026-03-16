@@ -17,7 +17,9 @@
 import { Icon } from '@iconify/react';
 import { ApiProxy, K8s, registerRoute, registerSidebarEntry } from '@kinvolk/headlamp-plugin/lib';
 import {
+  CreateResourceButton,
   DetailsGrid,
+  EditorDialog,
   LightTooltip,
   Link,
   Loader,
@@ -25,6 +27,7 @@ import {
   SectionBox,
   SimpleTable,
   StatusLabel,
+  Table,
 } from '@kinvolk/headlamp-plugin/lib/CommonComponents';
 import { makeCustomResourceClass } from '@kinvolk/headlamp-plugin/lib/Crd';
 import Box from '@mui/material/Box';
@@ -34,6 +37,7 @@ import InputLabel from '@mui/material/InputLabel';
 import MenuItem from '@mui/material/MenuItem';
 import Select from '@mui/material/Select';
 import Typography from '@mui/material/Typography';
+import * as yaml from 'js-yaml';
 import { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
 
@@ -160,13 +164,6 @@ registerSidebarEntry({
 
 registerSidebarEntry({
   parent: 'fleet',
-  name: 'fleet-resource-overrides',
-  label: 'Resource Overrides',
-  url: '/fleet/resource-overrides',
-});
-
-registerSidebarEntry({
-  parent: 'fleet',
   name: 'fleet-staged-resources',
   label: 'Staged Resources',
   url: '/fleet/staged-resources',
@@ -177,6 +174,13 @@ registerSidebarEntry({
   name: 'fleet-placement-policies',
   label: 'Placement Policies',
   url: '/fleet/placement-policies',
+});
+
+registerSidebarEntry({
+  parent: 'fleet',
+  name: 'fleet-resource-overrides',
+  label: 'Resource Overrides',
+  url: '/fleet/resource-overrides',
 });
 
 registerSidebarEntry({
@@ -475,6 +479,7 @@ function MemberClusters() {
     <ResourceListView
       title="Member Clusters"
       resourceClass={MemberCluster}
+      headerProps={{ titleSideActions: [] }}
       columns={[
         {
           label: 'Member Name',
@@ -527,6 +532,8 @@ function MemberClusters() {
 
 function StagedResources() {
   const [namespaces] = K8s.ResourceClasses.Namespace.useList();
+  const [rolloutEditorOpen, setRolloutEditorOpen] = useState(false);
+  const [rolloutTemplate, setRolloutTemplate] = useState<any>({});
 
   const filteredNamespaces =
     namespaces?.filter(namespace => {
@@ -539,19 +546,452 @@ function StagedResources() {
       );
     }) ?? null;
 
+  const createClusterRolloutPlacement = (selectedNamespaces: string[]) => ({
+    apiVersion: 'placement.kubernetes-fleet.io/v1beta1',
+    kind: 'ClusterResourcePlacement',
+    metadata: {
+      name: `rollout-selected-namespaces-${Date.now()}`,
+    },
+    spec: {
+      resourceSelectors: selectedNamespaces.map(namespace => ({
+        group: '',
+        version: 'v1',
+        kind: 'Namespace',
+        name: namespace,
+        selectionScope: 'NamespaceWithResources',
+      })),
+      policy: {
+        placementType: 'PickAll',
+      },
+    },
+  });
+
   return (
-    <ResourceListView
-      title="Staged Resources"
-      data={filteredNamespaces}
-      columns={[
-        'name',
-        {
-          label: 'Status',
-          getValue: (item: any) => item.jsonData?.status?.phase ?? '-',
+    <>
+      <SectionBox title="Staged Resources">
+        <Box display="flex" justifyContent="flex-end" mb={1.5}>
+          <CreateResourceButton resourceClass={K8s.ResourceClasses.Namespace} />
+        </Box>
+        <Table<any>
+          loading={filteredNamespaces === null}
+          data={filteredNamespaces ?? []}
+          enableRowSelection
+          columns={[
+            {
+              id: 'name',
+              header: 'Name',
+              accessorFn: item => item.getName(),
+              Cell: ({ row }) => {
+                const namespace = row.original.getName();
+
+                return (
+                  <Link routeName="fleet-staged-resource-details" params={{ namespace }}>
+                    {namespace}
+                  </Link>
+                );
+              },
+            },
+            {
+              id: 'status',
+              header: 'Status',
+              accessorFn: item => item.jsonData?.status?.phase ?? '-',
+            },
+            {
+              id: 'age',
+              header: 'Age',
+              accessorFn: item => item.jsonData?.metadata?.creationTimestamp ?? '-',
+            },
+          ]}
+          getRowId={item => item?.metadata?.uid || item?.getName()}
+          renderRowSelectionToolbar={({ table }) => {
+            const selectedItems = table.getSelectedRowModel().rows.map(row => row.original as any);
+            const selectedNamespaces = selectedItems
+              .map(item => item.getName())
+              .filter((namespaceName: string) => !!namespaceName);
+
+            const deleteSelectedNamespaces = () => {
+              if (selectedItems.length === 0) {
+                return;
+              }
+
+              const isConfirmed = window.confirm(
+                `Delete ${selectedItems.length} selected namespace(s)?`
+              );
+              if (!isConfirmed) {
+                return;
+              }
+
+              Promise.allSettled(
+                selectedItems.map(item =>
+                  typeof item.delete === 'function'
+                    ? item.delete()
+                    : ApiProxy.request(`/api/v1/namespaces/${encodeURIComponent(item.getName())}`, {
+                        method: 'DELETE',
+                      })
+                )
+              ).finally(() => {
+                table.resetRowSelection();
+              });
+            };
+
+            const openRolloutEditor = () => {
+              if (selectedNamespaces.length === 0) {
+                return;
+              }
+
+              setRolloutTemplate(createClusterRolloutPlacement(selectedNamespaces));
+              setRolloutEditorOpen(true);
+            };
+
+            return (
+              <Box display="flex" gap={1}>
+                <Button color="error" variant="contained" onClick={deleteSelectedNamespaces}>
+                  Delete
+                </Button>
+                <Button variant="contained" onClick={openRolloutEditor}>
+                  Rollout to members
+                </Button>
+              </Box>
+            );
+          }}
+        />
+      </SectionBox>
+      <EditorDialog
+        open={rolloutEditorOpen}
+        title="Rollout to Members"
+        item={rolloutTemplate}
+        onSave="default"
+        onClose={() => setRolloutEditorOpen(false)}
+        saveLabel="Create Cluster Placement Policy"
+      />
+    </>
+  );
+}
+
+type NamespaceResourceDefinition = {
+  group: string;
+  version: string;
+  kind: string;
+  pluralName: string;
+  apiVersion: string;
+};
+
+type NamespaceResourceRow = {
+  metadata: {
+    uid: string;
+    name: string;
+    namespace: string;
+    creationTimestamp?: string;
+  };
+  kind: string;
+  apiVersion: string;
+  group: string;
+  version: string;
+  pluralName: string;
+};
+
+function uniqueResourceKey(definition: NamespaceResourceDefinition): string {
+  return `${definition.group}/${definition.version}/${definition.pluralName}`;
+}
+
+async function listNamespacedResourceDefinitions(): Promise<NamespaceResourceDefinition[]> {
+  const definitionsMap = new Map<string, NamespaceResourceDefinition>();
+
+  const addDefinitions = (resources: any[], group: string, version: string) => {
+    resources
+      .filter(
+        resource =>
+          resource?.namespaced === true &&
+          Array.isArray(resource?.verbs) &&
+          resource.verbs.includes('list') &&
+          typeof resource?.name === 'string' &&
+          !resource.name.includes('/')
+      )
+      .forEach(resource => {
+        const definition: NamespaceResourceDefinition = {
+          group,
+          version,
+          kind: String(resource?.kind || ''),
+          pluralName: String(resource?.name || ''),
+          apiVersion: group ? `${group}/${version}` : version,
+        };
+
+        if (!definition.kind || !definition.pluralName) {
+          return;
+        }
+
+        definitionsMap.set(uniqueResourceKey(definition), definition);
+      });
+  };
+
+  const coreResources = await ApiProxy.request('/api/v1');
+  addDefinitions(coreResources?.resources ?? [], '', 'v1');
+
+  const apiGroups = await ApiProxy.request('/apis');
+  const groupVersions: string[] = Array.isArray(apiGroups?.groups)
+    ? apiGroups.groups.flatMap((group: any) =>
+        Array.isArray(group?.versions)
+          ? group.versions.map((version: any) => version?.groupVersion)
+          : []
+      )
+    : [];
+
+  const discoveryResults = await Promise.allSettled(
+    groupVersions
+      .filter(groupVersion => typeof groupVersion === 'string' && groupVersion.length > 0)
+      .map(groupVersion => ApiProxy.request(`/apis/${groupVersion}`))
+  );
+
+  discoveryResults.forEach((result: PromiseSettledResult<any>) => {
+    if (result.status !== 'fulfilled') {
+      return;
+    }
+
+    const groupVersion = String(result.value?.groupVersion || '');
+    const slashIndex = groupVersion.indexOf('/');
+    if (slashIndex < 1) {
+      return;
+    }
+
+    const group = groupVersion.slice(0, slashIndex);
+    const version = groupVersion.slice(slashIndex + 1);
+    addDefinitions(result.value?.resources ?? [], group, version);
+  });
+
+  return Array.from(definitionsMap.values());
+}
+
+function makeNamespacedResourcePath(
+  namespace: string,
+  definition: Pick<NamespaceResourceDefinition, 'group' | 'version' | 'pluralName'>
+): string {
+  if (!definition.group) {
+    return `/api/${definition.version}/namespaces/${namespace}/${definition.pluralName}`;
+  }
+
+  return `/apis/${definition.group}/${definition.version}/namespaces/${namespace}/${definition.pluralName}`;
+}
+
+function makeNamespacedResourceItemPath(namespace: string, item: NamespaceResourceRow): string {
+  return `${makeNamespacedResourcePath(namespace, item)}/${encodeURIComponent(item.metadata.name)}`;
+}
+
+async function listAllNamespaceResources(namespace: string): Promise<NamespaceResourceRow[]> {
+  const resourceDefinitions = await listNamespacedResourceDefinitions();
+  const listResults = await Promise.allSettled(
+    resourceDefinitions.map(definition =>
+      ApiProxy.request(makeNamespacedResourcePath(namespace, definition)).then(response => ({
+        definition,
+        items: Array.isArray(response?.items) ? response.items : [],
+      }))
+    )
+  );
+
+  const rows: NamespaceResourceRow[] = [];
+
+  listResults.forEach((result, definitionIndex) => {
+    if (result.status !== 'fulfilled') {
+      return;
+    }
+
+    const definition = resourceDefinitions[definitionIndex];
+    result.value.items.forEach((item: any) => {
+      const name = item?.metadata?.name;
+      const itemNamespace = item?.metadata?.namespace || namespace;
+      if (typeof name !== 'string' || !name) {
+        return;
+      }
+
+      rows.push({
+        metadata: {
+          uid:
+            item?.metadata?.uid ||
+            `${definition.apiVersion}/${definition.kind}/${itemNamespace}/${name}`,
+          name,
+          namespace: itemNamespace,
+          creationTimestamp: item?.metadata?.creationTimestamp,
         },
-        'age',
-      ]}
-    />
+        kind: definition.kind,
+        apiVersion: definition.apiVersion,
+        group: definition.group,
+        version: definition.version,
+        pluralName: definition.pluralName,
+      });
+    });
+  });
+
+  return rows;
+}
+
+function createRolloutPlacement(namespace: string, selectedResources: NamespaceResourceRow[]) {
+  const selectors = selectedResources.map(resource => ({
+    group: resource.group,
+    version: resource.version,
+    kind: resource.kind,
+    name: resource.metadata.name,
+  }));
+
+  return {
+    apiVersion: 'placement.kubernetes-fleet.io/v1beta1',
+    kind: 'ResourcePlacement',
+    metadata: {
+      name: `rollout-${namespace}-${Date.now()}`,
+      namespace,
+    },
+    spec: {
+      resourceSelectors: selectors,
+      policy: {
+        placementType: 'PickAll',
+      },
+    },
+  };
+}
+
+function StagedResourceDetails() {
+  const { namespace = '' } = useParams<{ namespace: string }>();
+  const [resources, setResources] = useState<NamespaceResourceRow[] | null>(null);
+  const [error, setError] = useState<string>('');
+  const [reloadToken, setReloadToken] = useState(0);
+  const [rolloutEditorOpen, setRolloutEditorOpen] = useState(false);
+  const [rolloutTemplate, setRolloutTemplate] = useState<any>({});
+
+  useEffect(() => {
+    let mounted = true;
+
+    setResources(null);
+    setError('');
+
+    listAllNamespaceResources(namespace)
+      .then(items => {
+        if (!mounted) {
+          return;
+        }
+
+        setResources(items);
+      })
+      .catch(listError => {
+        if (!mounted) {
+          return;
+        }
+
+        setResources([]);
+        setError(listError?.message || 'Unable to load namespace resources.');
+      });
+
+    return () => {
+      mounted = false;
+    };
+  }, [namespace, reloadToken]);
+
+  const refreshResources = () => {
+    setReloadToken(token => token + 1);
+  };
+
+  return (
+    <SectionBox title={`Staged Resource: ${namespace}`}>
+      <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
+        Select resources in this namespace and either delete them or generate a rollout placement
+        policy for member clusters.
+      </Typography>
+      {error && (
+        <Typography color="error" sx={{ mb: 1.5 }}>
+          {error}
+        </Typography>
+      )}
+      <Table<NamespaceResourceRow>
+        loading={resources === null}
+        data={resources ?? []}
+        enableRowSelection
+        columns={[
+          {
+            id: 'name',
+            header: 'Name',
+            accessorFn: item => item.metadata.name,
+          },
+          {
+            id: 'kind',
+            header: 'Kind',
+            accessorFn: item => item.kind,
+          },
+          {
+            id: 'apiVersion',
+            header: 'GVK',
+            accessorFn: item => `${item.apiVersion}/${item.kind}`,
+          },
+          {
+            id: 'namespace',
+            header: 'Namespace',
+            accessorFn: item => item.metadata.namespace,
+          },
+          {
+            id: 'age',
+            header: 'Created',
+            accessorFn: item => item.metadata.creationTimestamp || '-',
+          },
+        ]}
+        getRowId={item => item.metadata.uid}
+        renderRowSelectionToolbar={({ table }) => {
+          const selectedResources = table
+            .getSelectedRowModel()
+            .rows.map(row => row.original as NamespaceResourceRow);
+
+          const deleteSelectedResources = () => {
+            if (selectedResources.length === 0) {
+              return;
+            }
+
+            const isConfirmed = window.confirm(
+              `Delete ${selectedResources.length} selected resource(s) from namespace ${namespace}?`
+            );
+            if (!isConfirmed) {
+              return;
+            }
+
+            Promise.allSettled(
+              selectedResources.map(resource =>
+                ApiProxy.request(makeNamespacedResourceItemPath(namespace, resource), {
+                  method: 'DELETE',
+                })
+              )
+            ).finally(() => {
+              table.resetRowSelection();
+              refreshResources();
+            });
+          };
+
+          const openRolloutEditor = () => {
+            if (selectedResources.length === 0) {
+              return;
+            }
+
+            setRolloutTemplate(createRolloutPlacement(namespace, selectedResources));
+            setRolloutEditorOpen(true);
+          };
+
+          return (
+            <Box display="flex" gap={1}>
+              <Button color="error" variant="contained" onClick={deleteSelectedResources}>
+                Delete
+              </Button>
+              <Button variant="contained" onClick={openRolloutEditor}>
+                Rollout to members
+              </Button>
+            </Box>
+          );
+        }}
+      />
+      <EditorDialog
+        open={rolloutEditorOpen}
+        title="Rollout to Members"
+        item={rolloutTemplate}
+        onSave="default"
+        onClose={() => {
+          setRolloutEditorOpen(false);
+          refreshResources();
+        }}
+        saveLabel="Create Placement Policy"
+      />
+    </SectionBox>
   );
 }
 
@@ -610,6 +1050,11 @@ function PlacementPolicies() {
         {
           label: 'Policy',
           getValue: (item: any) => getPlacementPolicyType(item),
+        },
+        {
+          label: 'Scheduling Status',
+          getValue: (item: any) => getPlacementStatusDisplay(item).label,
+          render: (item: any) => makePlacementStatusLabel(item),
         },
         {
           label: 'Rollout Strategy',
@@ -685,28 +1130,68 @@ function getResourceSelectors(selectors: any[] | undefined): any[] {
   return selectors;
 }
 
-function formatPolicyDetails(item: any): string {
+function formatPolicyDetails(item: any) {
   const policy = item?.jsonData?.spec?.policy;
   if (!policy || typeof policy !== 'object') {
     return '-';
   }
 
-  if (policy.pickN) {
-    const numberOfClusters = policy.pickN?.numberOfClusters;
-    return numberOfClusters !== undefined && numberOfClusters !== null
-      ? `numberOfClusters=${numberOfClusters}`
-      : 'PickN';
+  const placementType = getPlacementPolicyType(item);
+  const isPickFixed = placementType === 'PickFixed';
+  const isPickN = placementType === 'PickN';
+  const isPickAll = placementType === 'PickAll';
+
+  const renderYamlSnippet = (snippet: Record<string, any>) => {
+    const yamlSnippet = yaml.dump(snippet, { lineWidth: -1, noRefs: true }).trim();
+
+    return (
+      <pre
+        style={{
+          margin: 0,
+          fontFamily: 'monospace',
+          whiteSpace: 'pre-wrap',
+        }}
+      >
+        {yamlSnippet}
+      </pre>
+    );
+  };
+
+  if (isPickFixed || policy.pickFixed) {
+    const clusterNames = policy.pickFixed?.clusterNames ?? policy.clusterNames;
+    if (Array.isArray(clusterNames) && clusterNames.length > 0) {
+      return renderYamlSnippet({ clusterNames });
+    }
+
+    return '-';
   }
 
-  if (policy.pickFixed) {
-    const clusterNames = policy.pickFixed?.clusterNames;
-    return Array.isArray(clusterNames) && clusterNames.length > 0
-      ? `clusterNames=${clusterNames.join(', ')}`
-      : 'PickFixed';
-  }
+  if (isPickAll || isPickN || policy.pickAll || policy.pickN) {
+    const affinity = policy.pickN?.affinity ?? policy.pickAll?.affinity ?? policy?.affinity;
+    const yamlFields: Record<string, any> = {};
 
-  if (policy.pickAll) {
-    return 'All clusters matching selector';
+    if (affinity !== undefined && affinity !== null) {
+      yamlFields.affinity = affinity;
+    }
+
+    if (isPickN || policy.pickN) {
+      const numberOfClusters = policy.pickN?.numberOfClusters ?? policy.numberOfClusters;
+      if (numberOfClusters !== undefined && numberOfClusters !== null) {
+        yamlFields.numberOfClusters = numberOfClusters;
+      }
+
+      const topologySpreadConstraints =
+        policy.pickN?.topologySpreadConstraints ?? policy.topologySpreadConstraints;
+      if (Array.isArray(topologySpreadConstraints) && topologySpreadConstraints.length > 0) {
+        yamlFields.topologySpreadConstraints = topologySpreadConstraints;
+      }
+    }
+
+    if (Object.keys(yamlFields).length === 0) {
+      return '-';
+    }
+
+    return renderYamlSnippet(yamlFields);
   }
 
   return '-';
@@ -720,6 +1205,78 @@ function formatConditions(conditions: any[] | undefined): string {
   return conditions
     .map(condition => `${condition?.type ?? 'Unknown'}=${condition?.status ?? '-'}`)
     .join(', ');
+}
+
+function getPrimaryCondition(entry: any): any {
+  const conditions = Array.isArray(entry?.conditions) ? entry.conditions : [];
+  if (conditions.length === 0) {
+    return null;
+  }
+
+  return (
+    conditions.find((condition: any) => String(condition?.status) === 'False') ||
+    conditions.find((condition: any) => String(condition?.status) === 'Unknown') ||
+    conditions[0]
+  );
+}
+
+function getPlacementStatusDisplay(item: any): {
+  label: string;
+  status: 'success' | 'warning' | 'error' | '';
+  detailedStatus: string;
+} {
+  const conditions = item?.jsonData?.status?.conditions;
+  const detailedStatus = Array.isArray(conditions)
+    ? conditions
+        .map((condition: any) => {
+          const conditionType = condition?.type ?? 'Unknown';
+          const conditionStatus = condition?.status ?? '-';
+          const reason = condition?.reason ? ` (${condition.reason})` : '';
+          const message = condition?.message ? `: ${condition.message}` : '';
+
+          return `${conditionType}=${conditionStatus}${reason}${message}`;
+        })
+        .join('\n')
+    : 'Unknown';
+
+  if (!Array.isArray(conditions) || conditions.length === 0) {
+    return { label: '-', status: '', detailedStatus };
+  }
+
+  const hasFalse = conditions.some((condition: any) => String(condition?.status) === 'False');
+  if (hasFalse) {
+    return { label: 'Not Ready', status: 'error', detailedStatus };
+  }
+
+  const hasUnknown = conditions.some((condition: any) => String(condition?.status) === 'Unknown');
+  if (hasUnknown) {
+    return { label: 'Pending', status: 'warning', detailedStatus };
+  }
+
+  return { label: 'Ready', status: 'success', detailedStatus };
+}
+
+function makePlacementStatusLabel(item: any) {
+  const statusDisplay = getPlacementStatusDisplay(item);
+
+  if (statusDisplay.label === '-') {
+    return '-';
+  }
+
+  return (
+    <Box display="flex" alignItems="center" gap={1}>
+      <LightTooltip title={statusDisplay.detailedStatus} interactive>
+        <Box display="inline">
+          <StatusLabel status={statusDisplay.status}>
+            {(statusDisplay.status === 'warning' || statusDisplay.status === 'error') && (
+              <Icon aria-label="hidden" icon="mdi:alert-outline" width="1.2rem" height="1.2rem" />
+            )}
+            {statusDisplay.label}
+          </StatusLabel>
+        </Box>
+      </LightTooltip>
+    </Box>
+  );
 }
 
 function ResourcePlacementDetails() {
@@ -741,7 +1298,6 @@ function ResourcePlacementDetails() {
       resourceType={resourceType}
       name={placementName}
       namespace={detailsNamespace}
-      withEvents
       extraInfo={(item: any) =>
         item && [
           {
@@ -753,8 +1309,12 @@ function ResourcePlacementDetails() {
             value: getPlacementPolicyType(item),
           },
           {
-            name: 'Policy Details',
+            name: 'Policy Criteria',
             value: formatPolicyDetails(item),
+          },
+          {
+            name: 'Status',
+            value: makePlacementStatusLabel(item),
           },
           {
             name: 'Cluster Names',
@@ -813,21 +1373,96 @@ function ResourcePlacementDetails() {
           ),
         },
         {
-          id: 'fleet.resource-placement-manifest',
+          id: 'fleet.resource-placement-conditions',
           section: (
-            <SectionBox title="Manifest">
-              <pre
-                style={{
-                  marginTop: '0.4rem',
-                  padding: '0.75rem',
-                  borderRadius: '8px',
-                  maxHeight: '24rem',
-                  overflow: 'auto',
-                  background: 'rgba(127,127,127,0.08)',
-                }}
-              >
-                {JSON.stringify(item?.jsonData, null, 2)}
-              </pre>
+            <SectionBox title="Conditions">
+              <SimpleTable
+                data={item?.jsonData?.status?.conditions ?? []}
+                columns={[
+                  {
+                    label: 'Type',
+                    getter: (condition: any) => condition?.type ?? '-',
+                  },
+                  {
+                    label: 'Status',
+                    getter: (condition: any) => condition?.status ?? '-',
+                  },
+                  {
+                    label: 'Reason',
+                    getter: (condition: any) => condition?.reason ?? '-',
+                  },
+                  {
+                    label: 'Message',
+                    getter: (condition: any) => condition?.message ?? '-',
+                  },
+                  {
+                    label: 'Last Transition Time',
+                    getter: (condition: any) => condition?.lastTransitionTime ?? '-',
+                  },
+                ]}
+                emptyMessage="No conditions found."
+              />
+            </SectionBox>
+          ),
+        },
+        {
+          id: 'fleet.resource-placement-placement-status',
+          section: (
+            <SectionBox title="Placement Status">
+              <Table<any>
+                data={(
+                  item?.jsonData?.status?.placementstatuses ??
+                  item?.jsonData?.status?.placementStatuses ??
+                  []
+                ).map((statusEntry: any, index: number) => ({
+                  ...statusEntry,
+                  __id:
+                    statusEntry?.clusterName || statusEntry?.cluster || statusEntry?.name
+                      ? `${
+                          statusEntry?.clusterName || statusEntry?.cluster || statusEntry?.name
+                        }-${index}`
+                      : `placement-status-${index}`,
+                }))}
+                getRowId={statusEntry => statusEntry.__id}
+                rowsPerPage={[10, 25, 50]}
+                columns={[
+                  {
+                    id: 'cluster',
+                    header: 'Picked Cluster',
+                    accessorFn: statusEntry =>
+                      statusEntry?.clusterName || statusEntry?.cluster || statusEntry?.name || '-',
+                  },
+                  {
+                    id: 'status',
+                    header: 'Status',
+                    accessorFn: statusEntry => {
+                      const primaryCondition = getPrimaryCondition(statusEntry);
+                      return primaryCondition?.status || '-';
+                    },
+                  },
+                  {
+                    id: 'conditions',
+                    header: 'Conditions',
+                    accessorFn: statusEntry => formatConditions(statusEntry?.conditions),
+                  },
+                  {
+                    id: 'reason',
+                    header: 'Reason',
+                    accessorFn: statusEntry => getPrimaryCondition(statusEntry)?.reason || '-',
+                  },
+                  {
+                    id: 'message',
+                    header: 'Message',
+                    accessorFn: statusEntry => getPrimaryCondition(statusEntry)?.message || '-',
+                  },
+                  {
+                    id: 'lastTransitionTime',
+                    header: 'Last Transition Time',
+                    accessorFn: statusEntry =>
+                      getPrimaryCondition(statusEntry)?.lastTransitionTime || '-',
+                  },
+                ]}
+              />
             </SectionBox>
           ),
         },
@@ -1304,6 +1939,14 @@ registerRoute({
   name: 'fleet-staged-resources',
   exact: true,
   component: StagedResources,
+});
+
+registerRoute({
+  path: '/fleet/staged-resources/:namespace',
+  sidebar: 'fleet-staged-resources',
+  name: 'fleet-staged-resource-details',
+  exact: true,
+  component: StagedResourceDetails,
 });
 
 registerRoute({
