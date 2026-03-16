@@ -15,7 +15,7 @@
  */
 
 import { Icon } from '@iconify/react';
-import { K8s, registerRoute, registerSidebarEntry } from '@kinvolk/headlamp-plugin/lib';
+import { ApiProxy, K8s, registerRoute, registerSidebarEntry } from '@kinvolk/headlamp-plugin/lib';
 import {
   DetailsGrid,
   LightTooltip,
@@ -28,7 +28,16 @@ import {
 } from '@kinvolk/headlamp-plugin/lib/CommonComponents';
 import { makeCustomResourceClass } from '@kinvolk/headlamp-plugin/lib/Crd';
 import Box from '@mui/material/Box';
+import Button from '@mui/material/Button';
+import FormControl from '@mui/material/FormControl';
+import InputLabel from '@mui/material/InputLabel';
+import MenuItem from '@mui/material/MenuItem';
+import Select from '@mui/material/Select';
+import Typography from '@mui/material/Typography';
+import { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
+
+const HUB_CLUSTER_STORAGE_KEY = 'fleet-plugin-hub-cluster';
 
 // ─── Custom Resource Classes ──────────────────────────────────────────────────
 
@@ -130,9 +139,16 @@ const StagedUpdateRun = makeCustomResourceClass(
 registerSidebarEntry({
   parent: null,
   name: 'fleet',
-  label: 'Fleet',
+  label: 'KubeFleet Manager',
   url: '/fleet/member-clusters',
-  icon: 'mdi:ship-wheel',
+  icon: 'mdi:cargo-ship',
+});
+
+registerSidebarEntry({
+  parent: 'fleet',
+  name: 'fleet-configuration',
+  label: 'Configure Plugin',
+  url: '/fleet/configuration',
 });
 
 registerSidebarEntry({
@@ -140,6 +156,13 @@ registerSidebarEntry({
   name: 'fleet-member-clusters',
   label: 'Member Clusters',
   url: '/fleet/member-clusters',
+});
+
+registerSidebarEntry({
+  parent: 'fleet',
+  name: 'fleet-resource-overrides',
+  label: 'Resource Overrides',
+  url: '/fleet/resource-overrides',
 });
 
 registerSidebarEntry({
@@ -169,6 +192,271 @@ registerSidebarEntry({
   label: 'Staged Rollout Runs',
   url: '/fleet/rollout-runs',
 });
+
+function getStoredHubCluster(): string {
+  if (typeof window === 'undefined') {
+    return '';
+  }
+
+  return window.localStorage.getItem(HUB_CLUSTER_STORAGE_KEY) || '';
+}
+
+function persistHubCluster(clusterName: string): void {
+  if (typeof window === 'undefined') {
+    return;
+  }
+
+  window.localStorage.setItem(HUB_CLUSTER_STORAGE_KEY, clusterName);
+}
+
+type FleetClusterInfo = {
+  name: string;
+  server: string;
+};
+
+function useFleetClusters() {
+  const [clusters, setClusters] = useState<FleetClusterInfo[]>([]);
+  const [error, setError] = useState<string>('');
+
+  useEffect(() => {
+    let mounted = true;
+
+    ApiProxy.request('/config', {}, false, false)
+      .then((response: any) => {
+        if (!mounted) {
+          return;
+        }
+
+        const availableClusters = Array.isArray(response?.clusters)
+          ? response.clusters
+              .map((cluster: any) => ({
+                name: typeof cluster?.name === 'string' ? cluster.name : '',
+                server: typeof cluster?.server === 'string' ? cluster.server : '',
+              }))
+              .filter((cluster: FleetClusterInfo) => cluster.name.length > 0)
+          : [];
+        setClusters(availableClusters);
+      })
+      .catch((requestError: any) => {
+        if (!mounted) {
+          return;
+        }
+
+        setError(requestError?.message || 'Unable to load clusters.');
+      });
+
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  return { clusters, error };
+}
+
+function FleetConfiguration() {
+  const { clusters, error } = useFleetClusters();
+  const [selectedHubCluster, setSelectedHubCluster] = useState(getStoredHubCluster());
+  const [savedHubCluster, setSavedHubCluster] = useState(getStoredHubCluster());
+  const selectedHubClusterDetails = clusters.find(cluster => cluster.name === selectedHubCluster);
+  const savedHubClusterDetails = clusters.find(cluster => cluster.name === savedHubCluster);
+
+  useEffect(() => {
+    if (clusters.length === 0) {
+      return;
+    }
+
+    if (savedHubCluster && clusters.some(cluster => cluster.name === savedHubCluster)) {
+      setSelectedHubCluster(savedHubCluster);
+      return;
+    }
+
+    const firstCluster = clusters[0].name;
+    setSelectedHubCluster(firstCluster);
+    if (!savedHubCluster) {
+      return;
+    }
+
+    persistHubCluster(firstCluster);
+    setSavedHubCluster(firstCluster);
+  }, [clusters, savedHubCluster]);
+
+  const handleSave = () => {
+    persistHubCluster(selectedHubCluster);
+    setSavedHubCluster(selectedHubCluster);
+  };
+
+  return (
+    <SectionBox title="KubeFleet Manager Configuration">
+      <Box display="grid" gap={2} maxWidth="36rem">
+        <Typography>
+          Select which existing Kubernetes cluster should be used as the Fleet hub cluster.
+        </Typography>
+        {error && <Typography color="error">Unable to load clusters: {error}</Typography>}
+        <FormControl fullWidth>
+          <InputLabel id="fleet-hub-cluster-label">Hub Cluster</InputLabel>
+          <Select
+            labelId="fleet-hub-cluster-label"
+            value={selectedHubCluster}
+            label="Hub Cluster"
+            onChange={event => setSelectedHubCluster(String(event.target.value || ''))}
+          >
+            {clusters.map(cluster => (
+              <MenuItem key={cluster.name} value={cluster.name}>
+                <Box display="grid">
+                  <Typography>{cluster.name}</Typography>
+                  <Typography variant="body2" color="text.secondary">
+                    {cluster.server || 'Server URL unavailable'}
+                  </Typography>
+                </Box>
+              </MenuItem>
+            ))}
+          </Select>
+        </FormControl>
+        <Typography variant="body2" color="text.secondary">
+          Selected cluster server URL: {selectedHubClusterDetails?.server || 'Unavailable'}
+        </Typography>
+        <Box display="flex" gap={1.5} alignItems="center">
+          <Button
+            variant="contained"
+            onClick={handleSave}
+            disabled={!selectedHubCluster || selectedHubCluster === savedHubCluster}
+          >
+            Save Hub Cluster
+          </Button>
+          <Typography variant="body2" color="text.secondary">
+            Active hub cluster: {savedHubCluster || 'Not configured'}
+            {savedHubCluster
+              ? ` (${savedHubClusterDetails?.server || 'Server URL unavailable'})`
+              : ''}
+          </Typography>
+        </Box>
+      </Box>
+    </SectionBox>
+  );
+}
+
+async function fetchResourceList(
+  hubCluster: string,
+  pluralName: 'clusterresourceoverrides' | 'resourceoverrides'
+): Promise<any[]> {
+  const versions = ['v1', 'v1beta1', 'v1alpha1'];
+
+  for (const version of versions) {
+    try {
+      const response = await ApiProxy.request(
+        `/clusters/${encodeURIComponent(
+          hubCluster
+        )}/apis/placement.kubernetes-fleet.io/${version}/${pluralName}`,
+        {},
+        false,
+        false
+      );
+
+      return Array.isArray(response?.items) ? response.items : [];
+    } catch (requestError: any) {
+      const status = requestError?.status || requestError?.response?.status;
+      if (status === 404 || status === 403) {
+        continue;
+      }
+
+      throw requestError;
+    }
+  }
+
+  return [];
+}
+
+function ResourceOverrides() {
+  const selectedHubCluster = getStoredHubCluster();
+  const [overrides, setOverrides] = useState<any[] | null>(null);
+  const [error, setError] = useState<string>('');
+
+  useEffect(() => {
+    let mounted = true;
+
+    if (!selectedHubCluster) {
+      setOverrides([]);
+      return () => {
+        mounted = false;
+      };
+    }
+
+    Promise.all([
+      fetchResourceList(selectedHubCluster, 'clusterresourceoverrides'),
+      fetchResourceList(selectedHubCluster, 'resourceoverrides'),
+    ])
+      .then(([clusterResourceOverrides, resourceOverrides]) => {
+        if (!mounted) {
+          return;
+        }
+
+        const mergedOverrides = [
+          ...clusterResourceOverrides.map((item: any) => ({ ...item, __scope: 'Cluster' })),
+          ...resourceOverrides.map((item: any) => ({ ...item, __scope: 'Namespace' })),
+        ];
+
+        setOverrides(mergedOverrides);
+      })
+      .catch((requestError: any) => {
+        if (!mounted) {
+          return;
+        }
+
+        setError(requestError?.message || 'Unable to load resource overrides.');
+        setOverrides([]);
+      });
+
+    return () => {
+      mounted = false;
+    };
+  }, [selectedHubCluster]);
+
+  if (!selectedHubCluster) {
+    return (
+      <SectionBox title="Resource Overrides">
+        <Typography>
+          Configure a hub cluster in KubeFleet Configuration before viewing Resource Overrides.
+        </Typography>
+      </SectionBox>
+    );
+  }
+
+  return (
+    <>
+      {error && (
+        <SectionBox title="Resource Overrides">
+          <Typography color="error">Unable to load overrides: {error}</Typography>
+        </SectionBox>
+      )}
+      <ResourceListView
+        title={`Resource Overrides (Hub: ${selectedHubCluster})`}
+        data={overrides}
+        columns={[
+          {
+            label: 'Name',
+            getValue: (item: any) => item?.metadata?.name || '-',
+          },
+          {
+            label: 'Type',
+            getValue: (item: any) => item?.kind || '-',
+          },
+          {
+            label: 'Scope',
+            getValue: (item: any) => item?.__scope || '-',
+          },
+          {
+            label: 'Namespace',
+            getValue: (item: any) => item?.metadata?.namespace || '-',
+          },
+          {
+            label: 'Created',
+            getValue: (item: any) => item?.metadata?.creationTimestamp || '-',
+          },
+        ]}
+      />
+    </>
+  );
+}
 
 // ─── Views ────────────────────────────────────────────────────────────────────
 
@@ -992,6 +1280,22 @@ registerRoute({
   name: 'fleet-member-clusters',
   exact: true,
   component: MemberClusters,
+});
+
+registerRoute({
+  path: '/fleet/configuration',
+  sidebar: 'fleet-configuration',
+  name: 'fleet-configuration',
+  exact: true,
+  component: FleetConfiguration,
+});
+
+registerRoute({
+  path: '/fleet/resource-overrides',
+  sidebar: 'fleet-resource-overrides',
+  name: 'fleet-resource-overrides',
+  exact: true,
+  component: ResourceOverrides,
 });
 
 registerRoute({
