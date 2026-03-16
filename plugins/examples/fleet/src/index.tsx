@@ -32,6 +32,7 @@ import {
 import { makeCustomResourceClass } from '@kinvolk/headlamp-plugin/lib/Crd';
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
+import Chip from '@mui/material/Chip';
 import FormControl from '@mui/material/FormControl';
 import InputLabel from '@mui/material/InputLabel';
 import ListItemIcon from '@mui/material/ListItemIcon';
@@ -466,6 +467,20 @@ function ResourceOverrides() {
 
 // ─── Views ────────────────────────────────────────────────────────────────────
 
+function renderMetadataChips(metadataMap: Record<string, string> | undefined) {
+  if (!metadataMap || Object.keys(metadataMap).length === 0) {
+    return <>-</>;
+  }
+
+  return (
+    <Box display="flex" flexWrap="wrap" gap={0.5} py={0.25}>
+      {Object.entries(metadataMap).map(([key, value]) => (
+        <Chip key={key} label={`${key}=${value}`} size="small" variant="outlined" />
+      ))}
+    </Box>
+  );
+}
+
 function MemberClusters() {
   const formatMetadataMap = (metadataMap: Record<string, string> | undefined) => {
     if (!metadataMap || Object.keys(metadataMap).length === 0) {
@@ -497,10 +512,45 @@ function MemberClusters() {
           },
         },
         {
-          label: 'Joined',
+          label: 'Status',
           gridTemplate: 'min-content',
-          getValue: (item: any) =>
-            item.jsonData?.status?.conditions?.find((c: any) => c.type === 'Joined')?.status ?? '-',
+          getValue: (item: any) => {
+            const props = item.jsonData?.status?.properties ?? {};
+            const nodeCount = Number(
+              props['kubernetes-fleet.io/node-count']?.value ??
+                props['kubernetes-fleet.io/node-count'] ??
+                0
+            );
+            const usage = item.jsonData?.status?.resourceUsage ?? {};
+            const allUsageZero =
+              Object.keys(usage).length === 0 ||
+              Object.values(usage).every(
+                (v: any) =>
+                  v === 0 || v === '0' || (typeof v === 'object' && Number(v?.value ?? 0) === 0)
+              );
+            return nodeCount === 0 && allUsageZero ? 'Unavailable' : 'Available';
+          },
+          render: (item: any) => {
+            const props = item.jsonData?.status?.properties ?? {};
+            const nodeCount = Number(
+              props['kubernetes-fleet.io/node-count']?.value ??
+                props['kubernetes-fleet.io/node-count'] ??
+                0
+            );
+            const usage = item.jsonData?.status?.resourceUsage ?? {};
+            const allUsageZero =
+              Object.keys(usage).length === 0 ||
+              Object.values(usage).every(
+                (v: any) =>
+                  v === 0 || v === '0' || (typeof v === 'object' && Number(v?.value ?? 0) === 0)
+              );
+            const unavailable = nodeCount === 0 && allUsageZero;
+            return (
+              <StatusLabel status={unavailable ? 'error' : 'success'}>
+                {unavailable ? 'Unavailable' : 'Available'}
+              </StatusLabel>
+            );
+          },
         },
         {
           label: 'Kubernetes',
@@ -522,10 +572,7 @@ function MemberClusters() {
         {
           label: 'Labels',
           getValue: (item: any) => formatMetadataMap(item.jsonData?.metadata?.labels),
-        },
-        {
-          label: 'Annotations',
-          getValue: (item: any) => formatMetadataMap(item.jsonData?.metadata?.annotations),
+          render: (item: any) => renderMetadataChips(item.jsonData?.metadata?.labels),
         },
       ]}
     />
