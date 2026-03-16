@@ -1798,9 +1798,36 @@ function getRolloutRunStatusDisplay(item: any): {
   status: 'success' | 'warning' | 'error' | '';
   detailedStatus: string;
 } {
+  const conditions = item?.jsonData?.status?.conditions;
+  const initializedCondition = Array.isArray(conditions)
+    ? conditions.find((condition: any) => condition?.type === 'Initialized')
+    : null;
+
+  if (initializedCondition) {
+    const initializedStatus = String(initializedCondition?.status ?? '').toLowerCase();
+    const reason = initializedCondition?.reason ? ` (${initializedCondition.reason})` : '';
+    const message = initializedCondition?.message ? `: ${initializedCondition.message}` : '';
+    const detailedStatus = `Initialized=${initializedCondition?.status ?? '-'}${reason}${message}`;
+
+    if (initializedStatus === 'true') {
+      return {
+        label: 'Intialized OK',
+        status: 'success',
+        detailedStatus,
+      };
+    }
+
+    if (initializedStatus === 'false') {
+      return {
+        label: 'Not Initialized',
+        status: 'error',
+        detailedStatus,
+      };
+    }
+  }
+
   const rawStatus = String(item?.jsonData?.spec?.State ?? item?.jsonData?.spec?.state ?? '').trim();
   const normalizedStatus = rawStatus.toLowerCase();
-  const conditions = item?.jsonData?.status?.conditions;
   const detailedStatus = Array.isArray(conditions)
     ? conditions
         .map((condition: any) => {
@@ -1858,6 +1885,57 @@ function makeRolloutRunStatusLabel(item: any) {
 
 function getRolloutRunScope(item: any): 'Cluster' | 'Namespace' {
   return item.getNamespace?.() ? 'Namespace' : 'Cluster';
+}
+
+function getStageStatusRows(item: any): Array<{ stageName: string; selectedClusters: string[] }> {
+  const status = item?.jsonData?.status ?? {};
+
+  const rawStages =
+    status?.stagesStatus ??
+    status?.stageStatuses ??
+    status?.stages ??
+    status?.runStatus?.stagesStatus ??
+    status?.runStatus?.stageStatuses ??
+    [];
+
+  if (!Array.isArray(rawStages)) {
+    return [];
+  }
+
+  return rawStages.map((stage: any, index: number) => {
+    const stageName =
+      stage?.stageName ??
+      stage?.name ??
+      stage?.stage ??
+      stage?.stageRef?.name ??
+      `Stage ${index + 1}`;
+
+    const selectedClusterNames =
+      stage?.selectedClusters ??
+      stage?.selectedClusterNames ??
+      stage?.clusterNames ??
+      stage?.clusters ??
+      stage?.targetClusters ??
+      stage?.selected?.clusters ??
+      [];
+
+    const clusterNames = Array.isArray(selectedClusterNames)
+      ? selectedClusterNames
+          .map((cluster: any) => {
+            if (typeof cluster === 'string') {
+              return cluster;
+            }
+
+            return cluster?.name ?? cluster?.clusterName ?? '';
+          })
+          .filter((name: string) => name.length > 0)
+      : [];
+
+    return {
+      stageName,
+      selectedClusters: clusterNames,
+    };
+  });
 }
 
 function RolloutRunDetails() {
@@ -1945,6 +2023,47 @@ function RolloutRunDetails() {
                   },
                 ]}
                 emptyMessage="No conditions found."
+              />
+            </SectionBox>
+          ),
+        },
+        {
+          id: 'fleet.rollout-run-stage-status',
+          section: (
+            <SectionBox title="Stage Status">
+              <SimpleTable
+                data={getStageStatusRows(item)}
+                columns={[
+                  {
+                    label: 'Stage',
+                    getter: (stage: { stageName: string }) => stage.stageName,
+                  },
+                  {
+                    label: 'Selected Clusters',
+                    getter: (stage: { selectedClusters: string[] }) => {
+                      if (
+                        !Array.isArray(stage.selectedClusters) ||
+                        stage.selectedClusters.length === 0
+                      ) {
+                        return '-';
+                      }
+
+                      return (
+                        <Box display="flex" flexWrap="wrap" gap={0.5} py={0.25}>
+                          {stage.selectedClusters.map(clusterName => (
+                            <Chip
+                              key={`${stage.stageName}-${clusterName}`}
+                              label={clusterName}
+                              size="small"
+                              variant="outlined"
+                            />
+                          ))}
+                        </Box>
+                      );
+                    },
+                  },
+                ]}
+                emptyMessage="No stage status found."
               />
             </SectionBox>
           ),
