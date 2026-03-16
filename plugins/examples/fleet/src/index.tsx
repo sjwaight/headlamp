@@ -34,12 +34,14 @@ import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
 import FormControl from '@mui/material/FormControl';
 import InputLabel from '@mui/material/InputLabel';
+import ListItemIcon from '@mui/material/ListItemIcon';
+import ListItemText from '@mui/material/ListItemText';
 import MenuItem from '@mui/material/MenuItem';
 import Select from '@mui/material/Select';
 import Typography from '@mui/material/Typography';
 import * as yaml from 'js-yaml';
 import { useEffect, useState } from 'react';
-import { useParams } from 'react-router-dom';
+import { useLocation, useParams } from 'react-router-dom';
 
 const HUB_CLUSTER_STORAGE_KEY = 'fleet-plugin-hub-cluster';
 
@@ -576,6 +578,7 @@ function StagedResources() {
           loading={filteredNamespaces === null}
           data={filteredNamespaces ?? []}
           enableRowSelection
+          enableRowActions
           columns={[
             {
               id: 'name',
@@ -595,6 +598,15 @@ function StagedResources() {
               id: 'status',
               header: 'Status',
               accessorFn: item => item.jsonData?.status?.phase ?? '-',
+              Cell: ({ row }) => {
+                const status = row.original.jsonData?.status?.phase ?? '-';
+
+                return (
+                  <StatusLabel status={status === 'Active' ? 'success' : 'error'}>
+                    {status}
+                  </StatusLabel>
+                );
+              },
             },
             {
               id: 'age',
@@ -602,6 +614,31 @@ function StagedResources() {
               accessorFn: item => item.jsonData?.metadata?.creationTimestamp ?? '-',
             },
           ]}
+          renderRowActionMenuItems={({ closeMenu, row }) => {
+            const namespace = row.original.getName();
+            const search = {
+              selectedName: namespace,
+              selectedKind: 'Namespace',
+              selectedVersion: 'v1',
+              selectedGroup: '',
+              selectedNamespace: namespace,
+            };
+
+            return [
+              <MenuItem
+                key="view-matching-policies"
+                component={Link as any}
+                routeName="fleet-placement-policies"
+                search={search}
+                onClick={closeMenu}
+              >
+                <ListItemIcon>
+                  <Icon icon="mdi:filter-variant" />
+                </ListItemIcon>
+                <ListItemText>View matching policies</ListItemText>
+              </MenuItem>,
+            ];
+          }}
           getRowId={item => item?.metadata?.uid || item?.getName()}
           renderRowSelectionToolbar={({ table }) => {
             const selectedItems = table.getSelectedRowModel().rows.map(row => row.original as any);
@@ -907,6 +944,24 @@ function StagedResourceDetails() {
             id: 'name',
             header: 'Name',
             accessorFn: item => item.metadata.name,
+            Cell: ({ row }) => {
+              const resource = row.original as NamespaceResourceRow;
+
+              return (
+                <Link
+                  routeName="fleet-placement-policies"
+                  search={{
+                    selectedName: resource.metadata.name,
+                    selectedKind: resource.kind,
+                    selectedVersion: resource.version,
+                    selectedGroup: resource.group || '',
+                    selectedNamespace: resource.metadata.namespace || '',
+                  }}
+                >
+                  {resource.metadata.name}
+                </Link>
+              );
+            },
           },
           {
             id: 'kind',
@@ -927,6 +982,30 @@ function StagedResourceDetails() {
             id: 'age',
             header: 'Created',
             accessorFn: item => item.metadata.creationTimestamp || '-',
+          },
+          {
+            id: 'placementPolicies',
+            header: 'Placement Policies',
+            accessorFn: () => 'View matching policies',
+            Cell: ({ row }) => {
+              const resource = row.original as NamespaceResourceRow;
+
+              return (
+                <Link
+                  routeName="fleet-placement-policies"
+                  underline="always"
+                  search={{
+                    selectedName: resource.metadata.name,
+                    selectedKind: resource.kind,
+                    selectedVersion: resource.version,
+                    selectedGroup: resource.group || '',
+                    selectedNamespace: resource.metadata.namespace || '',
+                  }}
+                >
+                  View matching policies
+                </Link>
+              );
+            },
           },
         ]}
         getRowId={item => item.metadata.uid}
@@ -998,70 +1077,138 @@ function StagedResourceDetails() {
 function PlacementPolicies() {
   const [clusterPlacements] = ClusterResourcePlacement.useList();
   const [resourcePlacements] = ResourcePlacement.useList();
+  const location = useLocation();
+
+  const searchParams = new URLSearchParams(location.search);
+  const selectedName = searchParams.get('selectedName') || '';
+  const selectedKind = searchParams.get('selectedKind') || '';
+  const selectedVersion = searchParams.get('selectedVersion') || '';
+  const selectedGroup = searchParams.get('selectedGroup') || '';
+  const selectedNamespace = searchParams.get('selectedNamespace') || '';
+  const hasSelectorFilter = !!(selectedName && selectedKind && selectedVersion);
+  const selectorApiVersion = selectedGroup
+    ? `${selectedGroup}/${selectedVersion}`
+    : selectedVersion;
+  const selectorScope = selectedNamespace
+    ? `namespace ${selectedNamespace}`
+    : 'all namespaces/cluster-scoped resources';
 
   const mergedPlacements =
     clusterPlacements && resourcePlacements ? [...clusterPlacements, ...resourcePlacements] : null;
 
+  const filteredPlacements =
+    mergedPlacements?.filter(item => {
+      if (!hasSelectorFilter) {
+        return true;
+      }
+
+      const selectors = item?.jsonData?.spec?.resourceSelectors;
+      if (!Array.isArray(selectors) || selectors.length === 0) {
+        return false;
+      }
+
+      return selectors.some((selector: any) => {
+        if ((selector?.name || '') !== selectedName) {
+          return false;
+        }
+
+        if ((selector?.kind || '') !== selectedKind) {
+          return false;
+        }
+
+        if ((selector?.version || '') !== selectedVersion) {
+          return false;
+        }
+
+        if ((selector?.group || '') !== selectedGroup) {
+          return false;
+        }
+
+        if (selectedNamespace && selector?.namespace && selector.namespace !== selectedNamespace) {
+          return false;
+        }
+
+        return true;
+      });
+    }) ?? null;
+
   return (
-    <ResourceListView
-      title="Placement Policies"
-      data={mergedPlacements}
-      columns={[
-        {
-          label: 'Name',
-          getValue: (item: any) => item.getName(),
-          render: (item: any) => {
-            const scope = getPlacementScope(item);
-            const name = item.getName();
-            const namespace = item.getNamespace?.();
-            const params =
-              scope === 'Namespace' && namespace
-                ? { scope: 'namespace', namespace, placementName: name }
-                : { scope: 'cluster', placementName: name };
-            const routeName =
-              scope === 'Namespace' && namespace
-                ? 'fleet-placement-policy-details-namespace'
-                : 'fleet-placement-policy-details-cluster';
+    <>
+      {hasSelectorFilter && (
+        <SectionBox title="Active Filter">
+          <Typography variant="body2">
+            Showing only placement policies that select <strong>{selectedKind}</strong>{' '}
+            <strong>{selectedName}</strong> ({selectorApiVersion}) within {selectorScope}.
+          </Typography>
+          <Box mt={1}>
+            <Link routeName="fleet-placement-policies">Clear filter</Link>
+          </Box>
+        </SectionBox>
+      )}
+      <ResourceListView
+        title="Placement Policies"
+        data={filteredPlacements}
+        columns={[
+          {
+            label: 'Name',
+            getValue: (item: any) => item.getName(),
+            render: (item: any) => {
+              const scope = getPlacementScope(item);
+              const name = item.getName();
+              const namespace = item.getNamespace?.();
+              const params =
+                scope === 'Namespace' && namespace
+                  ? { scope: 'namespace', namespace, placementName: name }
+                  : { scope: 'cluster', placementName: name };
+              const routeName =
+                scope === 'Namespace' && namespace
+                  ? 'fleet-placement-policy-details-namespace'
+                  : 'fleet-placement-policy-details-cluster';
 
-            return (
-              <Link routeName={routeName} params={params}>
-                {name}
-              </Link>
-            );
+              return (
+                <Link routeName={routeName} params={params}>
+                  {name}
+                </Link>
+              );
+            },
           },
-        },
-        {
-          label: 'Scope',
-          getValue: (item: any) => item.getNamespace?.() || 'Cluster',
-          render: (item: any) => {
-            const namespace = item.getNamespace?.();
+          {
+            label: 'Scope',
+            getValue: (item: any) => item.getNamespace?.() || 'Cluster',
+            render: (item: any) => {
+              const namespace = item.getNamespace?.();
 
-            if (!namespace) {
-              return 'Cluster';
-            }
+              if (!namespace) {
+                return 'Cluster';
+              }
 
-            return (
-              <Link routeName="namespace" params={{ name: namespace }} activeCluster={item.cluster}>
-                {namespace}
-              </Link>
-            );
+              return (
+                <Link
+                  routeName="namespace"
+                  params={{ name: namespace }}
+                  activeCluster={item.cluster}
+                >
+                  {namespace}
+                </Link>
+              );
+            },
           },
-        },
-        {
-          label: 'Policy',
-          getValue: (item: any) => getPlacementPolicyType(item),
-        },
-        {
-          label: 'Scheduling Status',
-          getValue: (item: any) => getPlacementStatusDisplay(item).label,
-          render: (item: any) => makePlacementStatusLabel(item),
-        },
-        {
-          label: 'Rollout Strategy',
-          getValue: (item: any) => getPlacementStrategyType(item),
-        },
-      ]}
-    />
+          {
+            label: 'Policy',
+            getValue: (item: any) => getPlacementPolicyType(item),
+          },
+          {
+            label: 'Scheduling Status',
+            getValue: (item: any) => getPlacementStatusDisplay(item).label,
+            render: (item: any) => makePlacementStatusLabel(item),
+          },
+          {
+            label: 'Rollout Strategy',
+            getValue: (item: any) => getPlacementStrategyType(item),
+          },
+        ]}
+      />
+    </>
   );
 }
 
