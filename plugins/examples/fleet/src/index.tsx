@@ -373,6 +373,174 @@ async function fetchResourceList(
   return [];
 }
 
+async function fetchResourceOverride(
+  hubCluster: string,
+  scope: 'cluster' | 'namespace',
+  name: string,
+  namespace?: string
+): Promise<any> {
+  const pluralName = scope === 'namespace' ? 'resourceoverrides' : 'clusterresourceoverrides';
+  const versions = ['v1', 'v1beta1', 'v1alpha1'];
+
+  for (const version of versions) {
+    try {
+      const basePath = `/clusters/${encodeURIComponent(
+        hubCluster
+      )}/apis/placement.kubernetes-fleet.io/${version}`;
+      const itemPath =
+        scope === 'namespace' && namespace
+          ? `${basePath}/namespaces/${encodeURIComponent(
+              namespace
+            )}/${pluralName}/${encodeURIComponent(name)}`
+          : `${basePath}/${pluralName}/${encodeURIComponent(name)}`;
+      return await ApiProxy.request(itemPath, {}, false, false);
+    } catch (requestError: any) {
+      const status = requestError?.status || requestError?.response?.status;
+      if (status === 404 || status === 403) {
+        continue;
+      }
+      throw requestError;
+    }
+  }
+
+  return {};
+}
+
+function ResourceOverrideDetails() {
+  const {
+    scope = '',
+    name = '',
+    namespace = '',
+  } = useParams<{ scope: string; name: string; namespace?: string }>();
+  const selectedHubCluster = getStoredHubCluster();
+  const [override, setOverride] = useState<any | null>(null);
+  const [detailError, setDetailError] = useState<string>('');
+
+  useEffect(() => {
+    let mounted = true;
+
+    if (!selectedHubCluster) {
+      setOverride({});
+      return () => {
+        mounted = false;
+      };
+    }
+
+    fetchResourceOverride(
+      selectedHubCluster,
+      scope === 'namespace' ? 'namespace' : 'cluster',
+      name,
+      namespace || undefined
+    )
+      .then(data => {
+        if (mounted) {
+          setOverride(data);
+        }
+      })
+      .catch((fetchError: any) => {
+        if (mounted) {
+          setDetailError(fetchError?.message || 'Unable to load resource override.');
+          setOverride({});
+        }
+      });
+
+    return () => {
+      mounted = false;
+    };
+  }, [selectedHubCluster, scope, name, namespace]);
+
+  const title = `Resource Override: ${name}`;
+
+  if (!selectedHubCluster) {
+    return (
+      <SectionBox title={title}>
+        <Typography>
+          Configure a hub cluster in KubeFleet Configuration before viewing resource override
+          details.
+        </Typography>
+      </SectionBox>
+    );
+  }
+
+  if (override === null) {
+    return (
+      <SectionBox title={title}>
+        <Loader title="Loading resource override" />
+      </SectionBox>
+    );
+  }
+
+  if (detailError) {
+    return (
+      <SectionBox title={title}>
+        <Typography color="error">{detailError}</Typography>
+      </SectionBox>
+    );
+  }
+
+  const conditions: any[] = override?.status?.conditions ?? [];
+  const rules: any[] = override?.spec?.rules ?? override?.spec?.overrides ?? [];
+  const labels = override?.metadata?.labels ?? {};
+  const annotations = override?.metadata?.annotations ?? {};
+
+  return (
+    <>
+      <SectionBox title={title}>
+        <SimpleTable
+          data={[
+            { field: 'Name', value: override?.metadata?.name ?? name },
+            { field: 'Kind', value: override?.kind ?? '-' },
+            {
+              field: 'Scope',
+              value:
+                scope === 'namespace'
+                  ? `Namespace (${override?.metadata?.namespace ?? namespace})`
+                  : 'Cluster',
+            },
+            { field: 'API Version', value: override?.apiVersion ?? '-' },
+            { field: 'Created', value: override?.metadata?.creationTimestamp ?? '-' },
+            { field: 'Labels', value: formatObjectSummary(labels) },
+            { field: 'Annotations', value: formatObjectSummary(annotations) },
+          ]}
+          columns={[
+            { label: 'Field', getter: (row: any) => row.field },
+            { label: 'Value', getter: (row: any) => row.value },
+          ]}
+        />
+      </SectionBox>
+      <SectionBox title="Override Rules">
+        <SimpleTable
+          data={rules}
+          columns={[
+            {
+              label: 'Spec',
+              getter: (rule: any) => (
+                <pre style={{ margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+                  {yaml.dump(rule)}
+                </pre>
+              ),
+            },
+          ]}
+          emptyMessage="No override rules defined."
+        />
+      </SectionBox>
+      <SectionBox title="Conditions">
+        <SimpleTable
+          data={conditions}
+          columns={[
+            { label: 'Type', getter: (c: any) => c?.type ?? '-' },
+            { label: 'Status', getter: (c: any) => c?.status ?? '-' },
+            { label: 'Reason', getter: (c: any) => c?.reason ?? '-' },
+            { label: 'Message', getter: (c: any) => c?.message ?? '-' },
+            { label: 'Last Transition', getter: (c: any) => c?.lastTransitionTime ?? '-' },
+          ]}
+          emptyMessage="No conditions found."
+        />
+      </SectionBox>
+    </>
+  );
+}
+
 function ResourceOverrides() {
   const selectedHubCluster = getStoredHubCluster();
   const [overrides, setOverrides] = useState<any[] | null>(null);
@@ -436,12 +604,34 @@ function ResourceOverrides() {
         </SectionBox>
       )}
       <ResourceListView
-        title={`Resource Overrides (Hub: ${selectedHubCluster})`}
+        title={`Resource Overrides`}
         data={overrides}
         columns={[
           {
             label: 'Name',
             getValue: (item: any) => item?.metadata?.name || '-',
+            render: (item: any) => {
+              const itemName = item?.metadata?.name;
+              if (!itemName) {
+                return '-';
+              }
+              const itemScope = item?.__scope === 'Namespace' ? 'namespace' : 'cluster';
+              const itemNamespace = item?.metadata?.namespace;
+              const routeName =
+                itemScope === 'namespace'
+                  ? 'fleet-resource-override-details-namespace'
+                  : 'fleet-resource-override-details-cluster';
+              const params =
+                itemScope === 'namespace' && itemNamespace
+                  ? { scope: itemScope, namespace: itemNamespace, name: itemName }
+                  : { scope: itemScope, name: itemName };
+
+              return (
+                <Link routeName={routeName} params={params}>
+                  {itemName}
+                </Link>
+              );
+            },
           },
           {
             label: 'Type',
@@ -1799,6 +1989,38 @@ function getRolloutRunStatusDisplay(item: any): {
   detailedStatus: string;
 } {
   const conditions = item?.jsonData?.status?.conditions;
+  const lastCondition =
+    Array.isArray(conditions) && conditions.length > 0 ? conditions.at(-1) : null;
+
+  if (
+    String(lastCondition?.reason ?? '') === 'UpdateRunSucceeded' &&
+    String(lastCondition?.type ?? '') === 'Succeeded' &&
+    String(lastCondition?.status ?? '') === 'True'
+  ) {
+    const message = lastCondition?.message ?? 'All stages are completed successfully';
+
+    return {
+      label: 'Completed',
+      status: 'success',
+      detailedStatus: message,
+    };
+  }
+
+  if (
+    String(lastCondition?.reason ?? '') === 'UpdateRunStopped' &&
+    String(lastCondition?.type ?? '') === 'Progressing' &&
+    String(lastCondition?.status ?? '') === 'False'
+  ) {
+    const reason = lastCondition?.reason ? ` (${lastCondition.reason})` : '';
+    const message = lastCondition?.message ? `: ${lastCondition.message}` : '';
+
+    return {
+      label: 'User stopped',
+      status: 'warning',
+      detailedStatus: `UpdateRunStopped=${lastCondition?.status ?? '-'}${reason}${message}`,
+    };
+  }
+
   const initializedCondition = Array.isArray(conditions)
     ? conditions.find((condition: any) => condition?.type === 'Initialized')
     : null;
@@ -1887,7 +2109,287 @@ function getRolloutRunScope(item: any): 'Cluster' | 'Namespace' {
   return item.getNamespace?.() ? 'Namespace' : 'Cluster';
 }
 
-function getStageStatusRows(item: any): Array<{ stageName: string; selectedClusters: string[] }> {
+function getRolloutRunApiPath(item: any): string {
+  const apiVersion = String(item?.jsonData?.apiVersion ?? 'placement.kubernetes-fleet.io/v1alpha1');
+  const [group, version] = apiVersion.includes('/')
+    ? apiVersion.split('/', 2)
+    : ['placement.kubernetes-fleet.io', apiVersion];
+  const name = item?.getName?.();
+  const namespace = item?.getNamespace?.();
+  const pluralName = namespace ? 'stagedupdateruns' : 'clusterstagedupdateruns';
+  const clusterPrefix = item?.cluster ? `/clusters/${encodeURIComponent(item.cluster)}` : '';
+  const basePath = `${clusterPrefix}/apis/${group}/${version}`;
+
+  return namespace
+    ? `${basePath}/namespaces/${encodeURIComponent(namespace)}/${pluralName}/${encodeURIComponent(
+        name
+      )}`
+    : `${basePath}/${pluralName}/${encodeURIComponent(name)}`;
+}
+
+async function updateRolloutRunState(item: any, nextState: 'Run' | 'Stop'): Promise<void> {
+  const patchBody = {
+    spec: {
+      State: nextState,
+      state: nextState,
+    },
+  };
+
+  if (typeof item?.patch === 'function') {
+    await item.patch(patchBody);
+    return;
+  }
+
+  await ApiProxy.request(getRolloutRunApiPath(item), {
+    method: 'PATCH',
+    headers: {
+      'Content-Type': 'application/merge-patch+json',
+    },
+    body: JSON.stringify(patchBody),
+  });
+}
+
+type StageStatusRow = {
+  id: string;
+  stageName: string;
+  selectedClusters: string[];
+  clusterStates: Record<string, 'in-progress' | 'completed' | 'failed' | 'unknown'>;
+  isProgressing: boolean;
+  stageStatus: 'stopped' | 'completed' | '';
+  stageStatusMessage: string;
+};
+
+function normalizeClusterNames(value: any): string[] {
+  const clusterValues = Array.isArray(value) ? value : value ? [value] : [];
+
+  return clusterValues
+    .map((cluster: any) => {
+      if (typeof cluster === 'string') {
+        return cluster;
+      }
+
+      return (
+        cluster?.name ??
+        cluster?.clusterName ??
+        cluster?.cluster ??
+        cluster?.memberClusterName ??
+        ''
+      );
+    })
+    .filter((name: string) => name.length > 0);
+}
+
+function hasProgressingCondition(value: any): boolean {
+  return Array.isArray(value)
+    ? value.some(
+        (condition: any) =>
+          String(condition?.type ?? '').toLowerCase() === 'progressing' &&
+          String(condition?.status ?? '').toLowerCase() === 'true'
+      )
+    : false;
+}
+
+function collectClusterConditionTokens(cluster: any): string[] {
+  const tokens: string[] = [];
+
+  const pushToken = (value: any) => {
+    if (typeof value === 'string' && value.trim().length > 0) {
+      tokens.push(value.trim().toLowerCase());
+    }
+  };
+
+  pushToken(cluster?.reason);
+  pushToken(cluster?.type);
+  pushToken(cluster?.status);
+  pushToken(cluster?.state);
+  pushToken(cluster?.phase);
+  pushToken(cluster?.message);
+
+  if (Array.isArray(cluster?.conditions)) {
+    cluster.conditions.forEach((condition: any) => {
+      pushToken(condition?.reason);
+      pushToken(condition?.type);
+      pushToken(condition?.status);
+      pushToken(condition?.message);
+    });
+  }
+
+  return tokens;
+}
+
+function getClusterStageState(cluster: any): 'in-progress' | 'completed' | 'failed' | 'unknown' {
+  const tokens = collectClusterConditionTokens(cluster);
+  const allText = tokens.join(' ');
+
+  const hasFailed =
+    /updatingfailed|clusterupdatingfailed|\bfailed\b|\berror\b/.test(allText) ||
+    (String(cluster?.status ?? '').toLowerCase() === 'false' &&
+      /progressing|updating/.test(String(cluster?.type ?? '').toLowerCase()));
+
+  if (hasFailed) {
+    return 'failed';
+  }
+
+  const hasSucceeded =
+    /updatingsucceed|updatingsucceeded|clusterupdatingsucceed|clusterupdatingsucceeded/.test(
+      allText
+    );
+
+  if (hasSucceeded) {
+    return 'completed';
+  }
+
+  const hasStarted =
+    /updatingstart|updatingstarted|clusterupdatingstart|clusterupdatingstarted/.test(allText);
+
+  if (hasStarted) {
+    return 'in-progress';
+  }
+
+  return 'unknown';
+}
+
+function getStageUpdatingStoppedMessage(stage: any): string {
+  const conditionCandidates = [
+    stage?.conditions,
+    stage?.stageConditions,
+    stage?.status?.conditions,
+  ];
+
+  for (const conditions of conditionCandidates) {
+    if (!Array.isArray(conditions) || conditions.length === 0) {
+      continue;
+    }
+
+    const lastCondition = conditions.at(-1);
+    if (String(lastCondition?.reason ?? '') === 'StageUpdatingStopped') {
+      return String(lastCondition?.message ?? '').trim();
+    }
+  }
+
+  return '';
+}
+
+function getStageUpdatingSucceededMessage(stage: any): string {
+  const conditionCandidates = [
+    stage?.conditions,
+    stage?.stageConditions,
+    stage?.status?.conditions,
+  ];
+
+  for (const conditions of conditionCandidates) {
+    if (!Array.isArray(conditions) || conditions.length === 0) {
+      continue;
+    }
+
+    const lastCondition = conditions.at(-1);
+    if (
+      String(lastCondition?.reason ?? '') === 'StageUpdatingSucceeded' &&
+      String(lastCondition?.type ?? '') === 'Succeeded' &&
+      String(lastCondition?.status ?? '') === 'True'
+    ) {
+      return String(lastCondition?.message ?? 'Stage update completed successfully').trim();
+    }
+  }
+
+  return '';
+}
+
+function isProgressingStage(stage: any): boolean {
+  const explicitStatusValues = [
+    stage?.stageStatus,
+    stage?.status,
+    stage?.state,
+    stage?.phase,
+    stage?.progress?.status,
+    stage?.progress?.state,
+  ];
+
+  if (
+    explicitStatusValues.some(
+      value => typeof value === 'string' && value.trim().toLowerCase() === 'progressing'
+    )
+  ) {
+    return true;
+  }
+
+  return (
+    hasProgressingCondition(stage?.conditions) || hasProgressingCondition(stage?.clusterStatus)
+  );
+}
+
+function getProcessingClusters(stage: any): string[] {
+  const directCandidates = [
+    stage?.processingClusters,
+    stage?.processingClusterNames,
+    stage?.progressingClusters,
+    stage?.progressingClusterNames,
+    stage?.updatingClusters,
+    stage?.updatingClusterNames,
+    stage?.currentClusters,
+    stage?.currentClusterNames,
+    stage?.processingCluster,
+    stage?.progressingCluster,
+    stage?.updatingCluster,
+    stage?.currentCluster,
+  ];
+
+  for (const candidate of directCandidates) {
+    const names = normalizeClusterNames(candidate);
+    if (names.length > 0) {
+      return names;
+    }
+  }
+
+  const statusCandidates = [
+    stage?.clusterStatuses,
+    stage?.clustersStatus,
+    stage?.clusterStatus,
+    stage?.clusters,
+  ];
+
+  for (const candidate of statusCandidates) {
+    if (!Array.isArray(candidate)) {
+      continue;
+    }
+
+    const names = candidate
+      .filter((cluster: any) => {
+        const clusterStatusValues = [
+          cluster?.stageStatus,
+          cluster?.status,
+          cluster?.state,
+          cluster?.phase,
+          cluster?.progress?.status,
+          cluster?.progress?.state,
+        ];
+
+        return (
+          clusterStatusValues.some(
+            value => typeof value === 'string' && value.trim().toLowerCase() === 'progressing'
+          ) || hasProgressingCondition(cluster?.conditions)
+        );
+      })
+      .map((cluster: any) => {
+        return (
+          cluster?.name ??
+          cluster?.clusterName ??
+          cluster?.cluster ??
+          cluster?.memberClusterName ??
+          ''
+        );
+      })
+      .filter((name: string) => name.length > 0);
+
+    if (names.length > 0) {
+      return names;
+    }
+  }
+
+  return [];
+}
+
+function getStageStatusRows(item: any): StageStatusRow[] {
   const status = item?.jsonData?.status ?? {};
 
   const rawStages =
@@ -1919,21 +2421,57 @@ function getStageStatusRows(item: any): Array<{ stageName: string; selectedClust
       stage?.selected?.clusters ??
       [];
 
-    const clusterNames = Array.isArray(selectedClusterNames)
-      ? selectedClusterNames
-          .map((cluster: any) => {
-            if (typeof cluster === 'string') {
-              return cluster;
-            }
+    const clusterNames = normalizeClusterNames(selectedClusterNames);
 
-            return cluster?.name ?? cluster?.clusterName ?? '';
-          })
-          .filter((name: string) => name.length > 0)
-      : [];
+    const clusterStates: Record<string, 'in-progress' | 'completed' | 'failed' | 'unknown'> = {};
+    const stageClusters = Array.isArray(stage?.clusters) ? stage.clusters : [];
+
+    stageClusters.forEach((cluster: any) => {
+      const clusterName =
+        cluster?.clusterName ?? cluster?.name ?? cluster?.memberClusterName ?? cluster?.cluster;
+
+      if (typeof clusterName !== 'string' || clusterName.length === 0) {
+        return;
+      }
+
+      clusterStates[clusterName] = getClusterStageState(cluster);
+    });
+
+    const processingClusters = getProcessingClusters(stage);
+    processingClusters.forEach(clusterName => {
+      clusterStates[clusterName] = 'in-progress';
+    });
+
+    clusterNames.forEach(clusterName => {
+      if (!clusterStates[clusterName]) {
+        clusterStates[clusterName] = 'unknown';
+      }
+    });
+
+    const combinedClusterNames = Array.from(
+      new Set([...clusterNames, ...Object.keys(clusterStates)])
+    );
+
+    const isProgressing =
+      isProgressingStage(stage) ||
+      Object.values(clusterStates).some(clusterState => clusterState === 'in-progress');
+    const stageStoppedMessage = getStageUpdatingStoppedMessage(stage);
+    const stageSucceededMessage = getStageUpdatingSucceededMessage(stage);
+    const stageStatusMessage = stageStoppedMessage || stageSucceededMessage;
+    const stageStatus: StageStatusRow['stageStatus'] = stageStoppedMessage
+      ? 'stopped'
+      : stageSucceededMessage
+      ? 'completed'
+      : '';
 
     return {
+      id: `${stageName}-${index}`,
       stageName,
-      selectedClusters: clusterNames,
+      selectedClusters: combinedClusterNames,
+      clusterStates,
+      isProgressing,
+      stageStatus,
+      stageStatusMessage,
     };
   });
 }
@@ -1978,10 +2516,6 @@ function RolloutRunDetails() {
           {
             name: 'Status',
             value: makeRolloutRunStatusLabel(item),
-          },
-          {
-            name: 'Conditions',
-            value: formatConditions(item.jsonData?.status?.conditions),
           },
           {
             name: 'Labels',
@@ -2031,16 +2565,78 @@ function RolloutRunDetails() {
           id: 'fleet.rollout-run-stage-status',
           section: (
             <SectionBox title="Stage Status">
-              <SimpleTable
+              <Table<StageStatusRow>
                 data={getStageStatusRows(item)}
+                getRowId={stage => stage.id}
+                enableSorting={false}
+                enableTopToolbar={false}
+                enableBottomToolbar={false}
                 columns={[
                   {
-                    label: 'Stage',
-                    getter: (stage: { stageName: string }) => stage.stageName,
+                    id: 'stageName',
+                    header: 'Stage',
+                    accessorFn: stage => stage.stageName,
+                    muiTableBodyCellProps: ({ row }) => ({
+                      sx: {
+                        backgroundColor: row.original.isProgressing
+                          ? 'rgba(13, 71, 161, 0.12)'
+                          : undefined,
+                        borderLeft: row.original.isProgressing ? `3px solid #0d47a1` : undefined,
+                      },
+                    }),
                   },
                   {
-                    label: 'Selected Clusters',
-                    getter: (stage: { selectedClusters: string[] }) => {
+                    id: 'status',
+                    header: 'Status',
+                    accessorFn: stage => stage.stageStatus || '-',
+                    Cell: ({ row }) => {
+                      const stage = row.original;
+
+                      if (stage.stageStatus === 'stopped') {
+                        return (
+                          <LightTooltip
+                            title={stage.stageStatusMessage || 'Stage update stopped'}
+                            interactive
+                          >
+                            <Box display="inline">
+                              <StatusLabel status="warning">Stopped</StatusLabel>
+                            </Box>
+                          </LightTooltip>
+                        );
+                      }
+
+                      if (stage.stageStatus === 'completed') {
+                        return (
+                          <LightTooltip
+                            title={
+                              stage.stageStatusMessage || 'Stage update completed successfully'
+                            }
+                            interactive
+                          >
+                            <Box display="inline">
+                              <StatusLabel status="success">Completed</StatusLabel>
+                            </Box>
+                          </LightTooltip>
+                        );
+                      }
+
+                      return '-';
+                    },
+                    muiTableBodyCellProps: ({ row }) => ({
+                      sx: {
+                        backgroundColor: row.original.isProgressing
+                          ? 'rgba(13, 71, 161, 0.12)'
+                          : undefined,
+                      },
+                    }),
+                  },
+                  {
+                    id: 'selectedClusters',
+                    header: 'Selected Clusters',
+                    accessorFn: stage => stage.selectedClusters.join(', '),
+                    Cell: ({ row }) => {
+                      const stage = row.original;
+
                       if (
                         !Array.isArray(stage.selectedClusters) ||
                         stage.selectedClusters.length === 0
@@ -2050,17 +2646,57 @@ function RolloutRunDetails() {
 
                       return (
                         <Box display="flex" flexWrap="wrap" gap={0.5} py={0.25}>
-                          {stage.selectedClusters.map(clusterName => (
-                            <Chip
-                              key={`${stage.stageName}-${clusterName}`}
-                              label={clusterName}
-                              size="small"
-                              variant="outlined"
-                            />
-                          ))}
+                          {stage.selectedClusters.map(clusterName =>
+                            (() => {
+                              const clusterState = stage.clusterStates[clusterName] ?? 'unknown';
+                              const chipLabel =
+                                clusterState === 'in-progress'
+                                  ? `${clusterName} (In progress)`
+                                  : clusterState === 'completed'
+                                  ? `${clusterName} (Completed)`
+                                  : clusterState === 'failed'
+                                  ? `${clusterName} (Failed)`
+                                  : clusterName;
+
+                              return (
+                                <Chip
+                                  key={`${stage.stageName}-${clusterName}`}
+                                  label={chipLabel}
+                                  size="small"
+                                  variant={clusterState === 'unknown' ? 'outlined' : 'filled'}
+                                  sx={
+                                    clusterState === 'in-progress'
+                                      ? {
+                                          backgroundColor: '#0d47a1',
+                                          color: '#fff',
+                                        }
+                                      : clusterState === 'completed'
+                                      ? {
+                                          backgroundColor: '#2e7d32',
+                                          color: '#fff',
+                                        }
+                                      : clusterState === 'failed'
+                                      ? {
+                                          backgroundColor: '#d32f2f',
+                                          color: '#fff',
+                                        }
+                                      : undefined
+                                  }
+                                />
+                              );
+                            })()
+                          )}
                         </Box>
                       );
                     },
+                    muiTableBodyCellProps: ({ row }) => ({
+                      sx: {
+                        backgroundColor: row.original.isProgressing
+                          ? 'rgba(13, 71, 161, 0.12)'
+                          : undefined,
+                        borderRight: row.original.isProgressing ? `1px solid #5e92f3` : undefined,
+                      },
+                    }),
                   },
                 ]}
                 emptyMessage="No stage status found."
@@ -2158,7 +2794,7 @@ function RolloutRuns() {
       data={mergedRolloutRuns}
       columns={[
         {
-          label: 'Name',
+          label: 'Run Name',
           getValue: (item: any) => item.getName(),
           render: (item: any) => {
             const scope = getRolloutRunScope(item);
@@ -2200,10 +2836,38 @@ function RolloutRuns() {
         {
           label: 'Placement',
           getValue: (item: any) => item.jsonData?.spec?.placementName ?? '-',
+          render: (item: any) => {
+            const placementName = item.jsonData?.spec?.placementName;
+            if (!placementName) {
+              return '-';
+            }
+
+            return (
+              <Link
+                routeName="fleet-placement-policy-details-cluster"
+                params={{ scope: 'cluster', placementName }}
+              >
+                {placementName}
+              </Link>
+            );
+          },
         },
         {
           label: 'Strategy',
-          getValue: (item: any) => item.jsonData?.spec?.stagedUpdateStrategySnapshot?.name ?? '-',
+          getValue: (item: any) => item.jsonData?.spec?.stagedRolloutStrategyName ?? '-',
+          render: (item: any) => {
+            const strategyName = item.jsonData?.spec?.stagedRolloutStrategyName;
+
+            if (!strategyName) {
+              return '-';
+            }
+
+            return (
+              <Link routeName="fleet-rollout-strategy-details" params={{ strategyName }}>
+                {strategyName}
+              </Link>
+            );
+          },
         },
         {
           label: 'Current Stage',
@@ -2215,6 +2879,62 @@ function RolloutRuns() {
           render: (item: any) => makeRolloutRunStatusLabel(item),
         },
         'age',
+      ]}
+      actions={[
+        {
+          id: 'start',
+          action: ({ item, closeMenu }: { item: any; closeMenu: () => void }) => {
+            const runName = item.getName();
+            const isCompleted = getRolloutRunStatusDisplay(item).label === 'Completed';
+
+            const handleStateUpdate = async () => {
+              closeMenu();
+
+              try {
+                await updateRolloutRunState(item, 'Run');
+                window.location.reload();
+              } catch (error: any) {
+                window.alert(error?.message || `Unable to set ${runName} to Run.`);
+              }
+            };
+
+            return (
+              <MenuItem key="start" disabled={isCompleted} onClick={() => void handleStateUpdate()}>
+                <ListItemIcon>
+                  <Icon icon="mdi:play" />
+                </ListItemIcon>
+                <ListItemText>Start</ListItemText>
+              </MenuItem>
+            );
+          },
+        },
+        {
+          id: 'stop',
+          action: ({ item, closeMenu }: { item: any; closeMenu: () => void }) => {
+            const runName = item.getName();
+            const isCompleted = getRolloutRunStatusDisplay(item).label === 'Completed';
+
+            const handleStateUpdate = async () => {
+              closeMenu();
+
+              try {
+                await updateRolloutRunState(item, 'Stop');
+                window.location.reload();
+              } catch (error: any) {
+                window.alert(error?.message || `Unable to set ${runName} to Stop.`);
+              }
+            };
+
+            return (
+              <MenuItem key="stop" disabled={isCompleted} onClick={() => void handleStateUpdate()}>
+                <ListItemIcon>
+                  <Icon icon="mdi:stop" />
+                </ListItemIcon>
+                <ListItemText>Stop</ListItemText>
+              </MenuItem>
+            );
+          },
+        },
       ]}
     />
   );
@@ -2244,6 +2964,22 @@ registerRoute({
   name: 'fleet-resource-overrides',
   exact: true,
   component: ResourceOverrides,
+});
+
+registerRoute({
+  path: '/fleet/resource-overrides/details/:scope/:name',
+  sidebar: 'fleet-resource-overrides',
+  name: 'fleet-resource-override-details-cluster',
+  exact: true,
+  component: ResourceOverrideDetails,
+});
+
+registerRoute({
+  path: '/fleet/resource-overrides/details/:scope/:namespace/:name',
+  sidebar: 'fleet-resource-overrides',
+  name: 'fleet-resource-override-details-namespace',
+  exact: true,
+  component: ResourceOverrideDetails,
 });
 
 registerRoute({
