@@ -1941,7 +1941,7 @@ function RolloutStrategies() {
   );
 }
 
-function formatLabelSelector(stage: any): string {
+function getLabelSelectorMap(stage: any): Record<string, string> | null {
   const matchLabels =
     stage?.labelSelector?.matchLabels ??
     stage?.clusterSelector?.matchLabels ??
@@ -1950,12 +1950,21 @@ function formatLabelSelector(stage: any): string {
     stage?.placement?.clusterSelector?.labelSelector?.matchLabels;
 
   if (!matchLabels || typeof matchLabels !== 'object' || Object.keys(matchLabels).length === 0) {
-    return '-';
+    return null;
   }
+  return matchLabels;
+}
 
-  return Object.entries(matchLabels)
-    .map(([key, value]) => `${key}=${String(value)}`)
-    .join(', ');
+function renderLabelSelectorChips(stage: any) {
+  const labels = getLabelSelectorMap(stage);
+  if (!labels) return <>-</>;
+  return (
+    <Box display="inline-flex" flexWrap="wrap" gap={0.5} ml={0.5}>
+      {Object.entries(labels).map(([key, value]) => (
+        <Chip key={key} label={`${key}=${String(value)}`} size="small" variant="outlined" />
+      ))}
+    </Box>
+  );
 }
 
 function getTaskType(task: any): string {
@@ -3183,35 +3192,73 @@ function RolloutStrategyDetails() {
       {stages.length === 0 ? (
         <div>No stages are defined for this strategy.</div>
       ) : (
-        <div style={{ display: 'grid', gap: '0.75rem' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
           {stages.map((stage, index) => (
-            <div
-              key={stage?.name ?? `stage-${index}`}
-              style={{
-                border: '1px solid rgba(127,127,127,0.35)',
-                borderRadius: '8px',
-                padding: '0.9rem',
-                background: 'rgba(127,127,127,0.06)',
-              }}
-            >
-              <div style={{ fontWeight: 700, marginBottom: '0.4rem' }}>
-                Stage {index + 1}: {stage?.name ?? 'Unnamed stage'}
-              </div>
-              <div style={{ display: 'grid', gap: '0.35rem' }}>
-                <div>
-                  <strong>Cluster Selector Labels:</strong> {formatLabelSelector(stage)}
+            <div key={stage?.name ?? `stage-${index}`}>
+              {index > 0 && (
+                <div
+                  style={{
+                    display: 'flex',
+                    justifyContent: 'center',
+                    padding: '4px 0',
+                  }}
+                >
+                  <Icon icon="mdi:arrow-down" width="1.5rem" height="1.5rem" color="#90a4ae" />
                 </div>
-                <div>
-                  <strong>Sorting Label Key:</strong> {stage?.sortingLabelKey ?? 'none'}
+              )}
+              <div
+                style={{
+                  border: '1px solid rgba(127,127,127,0.35)',
+                  borderRadius: '8px',
+                  padding: '0.9rem',
+                  background: 'rgba(127,127,127,0.06)',
+                }}
+              >
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '0.6rem',
+                    marginBottom: '0.6rem',
+                  }}
+                >
+                  <div
+                    style={{
+                      width: '2rem',
+                      height: '2rem',
+                      borderRadius: '50%',
+                      background: '#1976d2',
+                      color: '#fff',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      fontWeight: 700,
+                      fontSize: '0.85rem',
+                      flexShrink: 0,
+                    }}
+                  >
+                    {index + 1}
+                  </div>
+                  <Typography variant="subtitle1" sx={{ fontWeight: 700 }}>
+                    {stage?.name ?? 'Unnamed stage'}
+                  </Typography>
                 </div>
-                <div>
-                  <strong>Before Stage Tasks:</strong> {renderTaskList(stage?.beforeStageTasks)}
-                </div>
-                <div>
-                  <strong>After Stage Tasks:</strong> {renderTaskList(stage?.afterStageTasks)}
-                </div>
-                <div>
-                  <strong>Max Concurrency:</strong> {formatMaxConcurrency(stage)}
+                <div style={{ display: 'grid', gap: '0.35rem', paddingLeft: '2.6rem' }}>
+                  <div>
+                    <strong>Cluster Selector Labels:</strong> {renderLabelSelectorChips(stage)}
+                  </div>
+                  <div>
+                    <strong>Sorting Label Key:</strong> {stage?.sortingLabelKey ?? 'none'}
+                  </div>
+                  <div>
+                    <strong>Before Stage Tasks:</strong> {renderTaskList(stage?.beforeStageTasks)}
+                  </div>
+                  <div>
+                    <strong>After Stage Tasks:</strong> {renderTaskList(stage?.afterStageTasks)}
+                  </div>
+                  <div>
+                    <strong>Max Concurrency:</strong> {formatMaxConcurrency(stage)}
+                  </div>
                 </div>
               </div>
             </div>
