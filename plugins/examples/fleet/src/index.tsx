@@ -2454,20 +2454,36 @@ function parseTaskStatusArray(raw: any): StageTaskStatus[] {
 function deriveClusterState(
   conditions: KubeConditionEntry[]
 ): 'in-progress' | 'completed' | 'failed' | 'pending' {
+  // Check explicit Succeeded condition first
   const succeeded = findCondition(conditions, 'Succeeded');
   if (succeeded && succeeded.status === 'True') return 'completed';
 
+  // Fleet uses ClusterUpdatingCondition with reason to indicate state
+  const updating = findCondition(conditions, 'ClusterUpdatingCondition');
+  if (updating) {
+    if (updating.status === 'True' && /succeeded/i.test(updating.reason)) return 'completed';
+    if (/failed/i.test(updating.reason)) return 'failed';
+    // status=True with a non-succeeded/non-failed reason means in-progress
+    if (updating.status === 'True') return 'in-progress';
+    // status=False typically means not yet started or waiting
+    return 'in-progress';
+  }
+
   const started = findCondition(conditions, 'Started');
   if (started && started.status === 'True') {
-    // Started but not yet succeeded — check for failure via last condition
     const last = lastCondition(conditions);
     if (last && /failed/i.test(last.reason)) return 'failed';
     return 'in-progress';
   }
 
-  // No started condition — check if any condition indicates failure
+  // Fall back to last condition
   const last = lastCondition(conditions);
-  if (last && /failed/i.test(last.reason)) return 'failed';
+  if (last) {
+    if (/succeeded/i.test(last.reason) && last.status === 'True') return 'completed';
+    if (/failed/i.test(last.reason)) return 'failed';
+    // Any condition present means the cluster has been touched
+    return 'in-progress';
+  }
 
   return 'pending';
 }
@@ -2516,13 +2532,20 @@ function deriveStageStatus(
     let waitingFor: 'Approval' | 'TimedWait' | '' = '';
     let approvalRequestName = '';
 
-    // Check before-stage tasks first (approval blocks progression)
+    // Check before-stage tasks first
     for (const task of beforeTasks) {
       if (task.type === 'Approval') {
         const created = findCondition(task.conditions, 'ApprovalRequestCreated');
         if (created && created.status === 'True') {
           waitingFor = 'Approval';
           approvalRequestName = task.approvalRequestName ?? '';
+          break;
+        }
+      }
+      if (task.type === 'TimedWait') {
+        const elapsed = findCondition(task.conditions, 'WaitTimeElapsed');
+        if (!elapsed || elapsed.status !== 'True') {
+          waitingFor = 'TimedWait';
           break;
         }
       }
@@ -2545,21 +2568,6 @@ function deriveStageStatus(
             waitingFor = 'TimedWait';
             break;
           }
-        }
-      }
-    }
-
-    // Fall back to before-stage task types
-    if (!waitingFor) {
-      for (const task of beforeTasks) {
-        if (task.type === 'Approval') {
-          waitingFor = 'Approval';
-          approvalRequestName = task.approvalRequestName ?? '';
-          break;
-        }
-        if (task.type === 'TimedWait') {
-          waitingFor = 'TimedWait';
-          break;
         }
       }
     }
