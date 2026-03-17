@@ -92,19 +92,30 @@ const ResourcePlacement = makeCustomResourceClass(
 
 /**
  * ClusterStagedUpdateStrategy defines a staged rollout strategy for fleet updates.
- * API: placement.kubernetes-fleet.io/v1alpha1
+ * API: placement.kubernetes-fleet.io/v1
  */
 const ClusterStagedUpdateStrategy = makeCustomResourceClass(
   {
-    apiInfo: [
-      { group: 'placement.kubernetes-fleet.io', version: 'v1' },
-      { group: 'placement.kubernetes-fleet.io', version: 'v1alpha1' },
-    ],
+    apiInfo: [{ group: 'placement.kubernetes-fleet.io', version: 'v1' }],
     kind: 'ClusterStagedUpdateStrategy',
     pluralName: 'clusterstagedupdatestrategies',
     singularName: 'clusterstagedupdatestrategy',
     isNamespaced: false,
   } // cluster-scoped
+);
+
+/**
+ * StagedUpdateStrategy defines a namespace-scoped staged rollout strategy.
+ * API: placement.kubernetes-fleet.io/v1
+ */
+const StagedUpdateStrategy = makeCustomResourceClass(
+  {
+    apiInfo: [{ group: 'placement.kubernetes-fleet.io', version: 'v1' }],
+    kind: 'StagedUpdateStrategy',
+    pluralName: 'stagedupdatestrategies',
+    singularName: 'stagedupdatestrategy',
+    isNamespaced: true,
+  } // namespace-scoped
 );
 
 /**
@@ -1856,23 +1867,42 @@ function ResourcePlacementDetails() {
 }
 
 function RolloutStrategies() {
+  const [clusterStrategies] = ClusterStagedUpdateStrategy.useList();
+  const [namespacedStrategies] = StagedUpdateStrategy.useList();
+  const mergedStrategies =
+    clusterStrategies && namespacedStrategies
+      ? [...clusterStrategies, ...namespacedStrategies]
+      : null;
+
   return (
     <ResourceListView
       title="Rollout Strategies"
-      resourceClass={ClusterStagedUpdateStrategy}
+      data={mergedStrategies}
       columns={[
         {
           label: 'Name',
           getValue: (item: any) => item.getName(),
           render: (item: any) => {
             const strategyName = item.getName();
+            const strategyNamespace = item.getNamespace?.();
+            const routeName = strategyNamespace
+              ? 'fleet-rollout-strategy-details-namespace'
+              : 'fleet-rollout-strategy-details-cluster';
+            const params = strategyNamespace
+              ? { scope: 'namespace', namespace: strategyNamespace, strategyName }
+              : { scope: 'cluster', strategyName };
 
             return (
-              <Link routeName="fleet-rollout-strategy-details" params={{ strategyName }}>
+              <Link routeName={routeName} params={params}>
                 {strategyName}
               </Link>
             );
           },
+        },
+        {
+          label: 'Scope',
+          getValue: (item: any) => item.getNamespace?.() || 'Cluster',
+          render: (item: any) => item.getNamespace?.() || 'Cluster',
         },
         {
           label: 'Stage Count',
@@ -1972,6 +2002,38 @@ function renderTaskList(tasks: any[] | undefined) {
       {tasks.map((task, index) => renderTask(task, index))}
     </div>
   );
+}
+
+function getStageTasks(stage: any, when: 'before' | 'after'): any[] {
+  const candidates =
+    when === 'before'
+      ? [
+          stage?.beforeStageTasks,
+          stage?.beforeStageTask,
+          stage?.tasks?.beforeStageTasks,
+          stage?.tasks?.beforeStageTask,
+        ]
+      : [
+          stage?.afterStageTasks,
+          stage?.afterStageTask,
+          stage?.tasks?.afterStageTasks,
+          stage?.tasks?.afterStageTask,
+        ];
+
+  const resolved = candidates.find(Array.isArray);
+  return Array.isArray(resolved) ? resolved : [];
+}
+
+function normalizeStrategyStages(stages: any[] | undefined): any[] {
+  if (!Array.isArray(stages)) {
+    return [];
+  }
+
+  return stages.map(stage => ({
+    ...stage,
+    beforeStageTasks: getStageTasks(stage, 'before'),
+    afterStageTasks: getStageTasks(stage, 'after'),
+  }));
 }
 
 function formatMaxConcurrency(stage: any): string {
@@ -2710,10 +2772,23 @@ function RolloutRunDetails() {
 }
 
 function RolloutStrategyDetails() {
-  const { strategyName = '' } = useParams<{ strategyName: string }>();
-  const [strategy, error] = ClusterStagedUpdateStrategy.useGet(strategyName);
+  const {
+    scope = 'cluster',
+    strategyName = '',
+    namespace = '',
+  } = useParams<{ scope?: string; strategyName: string; namespace?: string }>();
+  const [clusterStrategies] = ClusterStagedUpdateStrategy.useList();
+  const [namespacedStrategies] = StagedUpdateStrategy.useList();
+  const isNamespaceScope = scope === 'namespace';
 
-  if (!strategy && !error) {
+  const strategy = isNamespaceScope
+    ? namespacedStrategies?.find(
+        item => item.getName?.() === strategyName && item.getNamespace?.() === namespace
+      )
+    : clusterStrategies?.find(item => item.getName?.() === strategyName);
+
+  const isLoading = isNamespaceScope ? !namespacedStrategies : !clusterStrategies;
+  if (isLoading) {
     return (
       <SectionBox title={`Rollout Strategy: ${strategyName}`}>
         <Loader title="Loading strategy details" />
@@ -2721,16 +2796,19 @@ function RolloutStrategyDetails() {
     );
   }
 
-  if (error) {
+  if (!strategy) {
     return (
       <SectionBox title={`Rollout Strategy: ${strategyName}`}>
-        <div>Unable to load strategy details: {error.message}</div>
+        <div>
+          Unable to load strategy details for{' '}
+          {isNamespaceScope ? `namespace ${namespace}` : 'cluster'}.
+        </div>
       </SectionBox>
     );
   }
 
   const strategyData = strategy?.jsonData;
-  const stages: any[] = strategyData?.spec?.stages ?? [];
+  const stages = normalizeStrategyStages(strategyData?.spec?.stages);
 
   return (
     <SectionBox title={`Rollout Strategy: ${strategyName}`}>
@@ -3034,6 +3112,22 @@ registerRoute({
   path: '/fleet/rollout-strategies/:strategyName',
   sidebar: 'fleet-rollout-strategies',
   name: 'fleet-rollout-strategy-details',
+  exact: true,
+  component: RolloutStrategyDetails,
+});
+
+registerRoute({
+  path: '/fleet/rollout-strategies/:scope/:strategyName',
+  sidebar: 'fleet-rollout-strategies',
+  name: 'fleet-rollout-strategy-details-cluster',
+  exact: true,
+  component: RolloutStrategyDetails,
+});
+
+registerRoute({
+  path: '/fleet/rollout-strategies/:scope/:namespace/:strategyName',
+  sidebar: 'fleet-rollout-strategies',
+  name: 'fleet-rollout-strategy-details-namespace',
   exact: true,
   component: RolloutStrategyDetails,
 });
