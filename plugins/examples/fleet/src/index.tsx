@@ -120,14 +120,11 @@ const StagedUpdateStrategy = makeCustomResourceClass(
 
 /**
  * ClusterStagedUpdateRun tracks a staged rollout execution across the fleet.
- * API: placement.kubernetes-fleet.io/v1alpha1
+ * API: placement.kubernetes-fleet.io/v1
  */
 const ClusterStagedUpdateRun = makeCustomResourceClass(
   {
-    apiInfo: [
-      { group: 'placement.kubernetes-fleet.io', version: 'v1' },
-      { group: 'placement.kubernetes-fleet.io', version: 'v1alpha1' },
-    ],
+    apiInfo: [{ group: 'placement.kubernetes-fleet.io', version: 'v1' }],
     kind: 'ClusterStagedUpdateRun',
     pluralName: 'clusterstagedupdateruns',
     singularName: 'clusterstagedupdaterun',
@@ -137,14 +134,11 @@ const ClusterStagedUpdateRun = makeCustomResourceClass(
 
 /**
  * StagedUpdateRun tracks a staged rollout execution in a namespace.
- * API: placement.kubernetes-fleet.io/v1alpha1
+ * API: placement.kubernetes-fleet.io/v1
  */
 const StagedUpdateRun = makeCustomResourceClass(
   {
-    apiInfo: [
-      { group: 'placement.kubernetes-fleet.io', version: 'v1' },
-      { group: 'placement.kubernetes-fleet.io', version: 'v1alpha1' },
-    ],
+    apiInfo: [{ group: 'placement.kubernetes-fleet.io', version: 'v1' }],
     kind: 'StagedUpdateRun',
     pluralName: 'stagedupdateruns',
     singularName: 'stagedupdaterun',
@@ -2178,12 +2172,13 @@ function makeRolloutRunStatusLabel(item: any) {
                 display: 'inline-flex',
                 alignItems: 'center',
                 gap: '4px',
-                px: '6px',
-                py: '2px',
+                px: '8px',
+                py: '4px',
                 borderRadius: '4px',
+                border: '1px solid transparent',
                 backgroundColor: '#e65100',
                 color: '#fff',
-                fontSize: '0.75rem',
+                fontSize: '0.875rem',
                 fontWeight: 600,
               }}
             >
@@ -2209,21 +2204,112 @@ function getRolloutRunScope(item: any): 'Cluster' | 'Namespace' {
 }
 
 function getRolloutRunApiPath(item: any): string {
-  const apiVersion = String(item?.jsonData?.apiVersion ?? 'placement.kubernetes-fleet.io/v1alpha1');
+  const apiVersion = String(item?.jsonData?.apiVersion ?? 'placement.kubernetes-fleet.io/v1');
   const [group, version] = apiVersion.includes('/')
     ? apiVersion.split('/', 2)
     : ['placement.kubernetes-fleet.io', apiVersion];
   const name = item?.getName?.();
   const namespace = item?.getNamespace?.();
   const pluralName = namespace ? 'stagedupdateruns' : 'clusterstagedupdateruns';
-  const clusterPrefix = item?.cluster ? `/clusters/${encodeURIComponent(item.cluster)}` : '';
-  const basePath = `${clusterPrefix}/apis/${group}/${version}`;
+  const basePath = `/apis/${group}/${version}`;
 
   return namespace
     ? `${basePath}/namespaces/${encodeURIComponent(namespace)}/${pluralName}/${encodeURIComponent(
         name
       )}`
     : `${basePath}/${pluralName}/${encodeURIComponent(name)}`;
+}
+
+function getRolloutRunStatusApiPath(item: any): string {
+  return `${getRolloutRunApiPath(item)}/status`;
+}
+
+/**
+ * Returns the stage name and approval-request resource name when the run's
+ * current stage is blocked waiting for an Approval task whose request has
+ * been created (beforeStageTaskStatus condition type=ApprovalRequestCreated,
+ * status='True').
+ */
+function getApprovalWaitingStage(
+  item: any
+): { stageName: string; approvalRequestName: string } | null {
+  const status = item?.jsonData?.status ?? {};
+  const rawStages =
+    status?.stagesStatus ??
+    status?.stageStatuses ??
+    status?.stages ??
+    status?.runStatus?.stagesStatus ??
+    status?.runStatus?.stageStatuses ??
+    [];
+  if (!Array.isArray(rawStages)) return null;
+
+  for (const stage of rawStages) {
+    const beforeTasks: any[] = Array.isArray(stage?.beforeStageTaskStatus)
+      ? stage.beforeStageTaskStatus
+      : [];
+    for (const task of beforeTasks) {
+      const conditions: any[] = Array.isArray(task?.conditions) ? task.conditions : [];
+      const hasApprovalCreated = conditions.some(
+        (c: any) =>
+          String(c?.type ?? '') === 'ApprovalRequestCreated' && String(c?.status ?? '') === 'True'
+      );
+      if (hasApprovalCreated) {
+        const stageName: string = stage?.stageName ?? stage?.name ?? stage?.stage ?? '';
+        const runName: string = item?.getName?.() ?? '';
+        // The approval request name is stored in the task entry when present,
+        // otherwise falls back to the Fleet naming convention: {run}-{stage}.
+        const approvalRequestName: string =
+          task?.name ?? (stageName ? `${runName}-${stageName}` : runName);
+        return { stageName, approvalRequestName };
+      }
+    }
+  }
+  return null;
+}
+
+async function approveStageRun(item: any): Promise<void> {
+  const observedGenerationRaw = item?.jsonData?.metadata?.generation;
+  const observedGeneration = Number.isFinite(Number(observedGenerationRaw))
+    ? Number(observedGenerationRaw)
+    : 1;
+  const lastTransitionTime = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
+  const patchBody = {
+    status: {
+      conditions: [
+        {
+          lastTransitionTime,
+          message: 'approvedbyuser',
+          observedGeneration,
+          reason: 'approvedbyuser',
+          status: 'True',
+          type: 'Approved',
+        },
+      ],
+    },
+  };
+
+  const statusPath = getRolloutRunStatusApiPath(item);
+  const clusterName = item?.cluster ?? null;
+  console.info('Fleet Approve action patching rollout run status', {
+    run: item?.getName?.(),
+    namespace: item?.getNamespace?.() ?? '',
+    cluster: clusterName,
+    path: statusPath,
+    patchBody,
+  });
+
+  await ApiProxy.request(statusPath, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/merge-patch+json' },
+    cluster: clusterName,
+    body: JSON.stringify(patchBody),
+  });
+
+  console.info('Fleet Approve action patch succeeded', {
+    run: item?.getName?.(),
+    cluster: clusterName,
+    path: statusPath,
+  });
 }
 
 async function updateRolloutRunState(item: any, nextState: 'Run' | 'Stop'): Promise<void> {
@@ -2555,8 +2641,24 @@ function getWaitingTaskType(
   message: string,
   stageEntry?: any
 ): 'Approval' | 'TimedWait' | '' {
-  // First, check tasks directly on the stage status entry (beforeStageTasks /
-  // afterStageTasks / afterStageTaskStatus are present in the API response).
+  // Highest priority: an ApprovalRequest has been created for a before-stage task
+  // (beforeStageTaskStatus contains a condition type=ApprovalRequestCreated, status=True).
+  if (stageEntry) {
+    const beforeTaskStatus: any[] = Array.isArray(stageEntry?.beforeStageTaskStatus)
+      ? stageEntry.beforeStageTaskStatus
+      : [];
+    const approvalCreated = beforeTaskStatus.some((task: any) =>
+      (Array.isArray(task?.conditions) ? task.conditions : []).some(
+        (c: any) =>
+          String(c?.type ?? '') === 'ApprovalRequestCreated' && String(c?.status ?? '') === 'True'
+      )
+    );
+    if (approvalCreated) {
+      return 'Approval';
+    }
+  }
+
+  // Next, check task-type fields directly on the stage status entry.
   if (stageEntry) {
     const allTasks = [
       ...(Array.isArray(stageEntry?.beforeStageTasks) ? stageEntry.beforeStageTasks : []),
@@ -2729,6 +2831,12 @@ function RolloutRunDetails() {
   const resourceType = isNamespaceScope ? StagedUpdateRun : ClusterStagedUpdateRun;
   const detailsNamespace = isNamespaceScope ? namespace || undefined : undefined;
 
+  const getRolloutRunStrategyName = (item: any): string =>
+    item?.jsonData?.spec?.stagedRolloutStrategyName ??
+    item?.jsonData?.spec?.stagedUpdateStrategyName ??
+    item?.jsonData?.spec?.stagedUpdateStrategySnapshot?.name ??
+    '-';
+
   return (
     <DetailsGrid
       resourceType={resourceType}
@@ -2746,11 +2854,11 @@ function RolloutRunDetails() {
           },
           {
             name: 'Strategy',
-            value: item.jsonData?.spec?.stagedUpdateStrategySnapshot?.name ?? '-',
+            value: getRolloutRunStrategyName(item),
           },
           {
             name: 'Current Stage',
-            value: item.jsonData?.status?.stageName ?? '-',
+            value: getCurrentStageName(item),
           },
           {
             name: 'Status',
@@ -2871,12 +2979,13 @@ function RolloutRunDetails() {
                                 display: 'inline-flex',
                                 alignItems: 'center',
                                 gap: '4px',
-                                px: '6px',
-                                py: '2px',
+                                px: '8px',
+                                py: '4px',
                                 borderRadius: '4px',
+                                border: '1px solid transparent',
                                 backgroundColor: '#e65100',
                                 color: '#fff',
-                                fontSize: '0.75rem',
+                                fontSize: '0.875rem',
                                 fontWeight: 600,
                               }}
                             >
@@ -3190,42 +3299,15 @@ function RolloutRuns() {
         {
           label: 'Waiting For',
           getValue: (item: any) => {
-            const conditions = item?.jsonData?.status?.conditions;
-            const lastCondition =
-              Array.isArray(conditions) && conditions.length > 0 ? conditions.at(-1) : null;
-            if (
-              String(lastCondition?.reason ?? '') !== 'UpdateRunWaiting' ||
-              String(lastCondition?.type ?? '') !== 'Progressing' ||
-              String(lastCondition?.status ?? '') !== 'False'
-            ) {
-              return '-';
-            }
-            const msg = String(lastCondition?.message ?? '').toLowerCase();
-            if (msg.includes('approval')) {
-              return 'Approval';
-            }
-            if (msg.includes('timed') || msg.includes('wait')) {
-              return 'TimedWait';
-            }
-            return 'Waiting';
+            const waitingRow = getStageStatusRows(item).find(r => r.stageStatus === 'waiting');
+            return waitingRow?.waitingFor || '-';
           },
           render: (item: any) => {
-            const conditions = item?.jsonData?.status?.conditions;
-            const lastCondition =
-              Array.isArray(conditions) && conditions.length > 0 ? conditions.at(-1) : null;
-            if (
-              String(lastCondition?.reason ?? '') !== 'UpdateRunWaiting' ||
-              String(lastCondition?.type ?? '') !== 'Progressing' ||
-              String(lastCondition?.status ?? '') !== 'False'
-            ) {
+            const waitingRow = getStageStatusRows(item).find(r => r.stageStatus === 'waiting');
+            const taskType = waitingRow?.waitingFor;
+            if (!taskType) {
               return '-';
             }
-            const msg = String(lastCondition?.message ?? '').toLowerCase();
-            const taskType = msg.includes('approval')
-              ? 'Approval'
-              : msg.includes('timed') || msg.includes('wait')
-              ? 'TimedWait'
-              : 'Waiting';
             const icon = taskType === 'Approval' ? 'mdi:account-check-outline' : 'mdi:timer-sand';
             return (
               <Box display="flex" alignItems="center" gap={0.5}>
@@ -3288,6 +3370,37 @@ function RolloutRuns() {
                   <Icon icon="mdi:stop" />
                 </ListItemIcon>
                 <ListItemText>Stop</ListItemText>
+              </MenuItem>
+            );
+          },
+        },
+        {
+          id: 'approve',
+          action: ({ item, closeMenu }: { item: any; closeMenu: () => void }) => {
+            const approvalInfo = getApprovalWaitingStage(item);
+            const canApprove = approvalInfo !== null;
+
+            const handleApprove = async () => {
+              closeMenu();
+              try {
+                await approveStageRun(item);
+                window.location.reload();
+              } catch (error: any) {
+                const statusPath = getRolloutRunStatusApiPath(item);
+                const clusterName = item?.cluster ?? 'current';
+                const errorMessage = error?.message || 'Unable to approve stage.';
+                window.alert(
+                  `${errorMessage}\nPath: ${statusPath}\nCluster: ${String(clusterName)}`
+                );
+              }
+            };
+
+            return (
+              <MenuItem key="approve" disabled={!canApprove} onClick={() => void handleApprove()}>
+                <ListItemIcon>
+                  <Icon icon="mdi:account-check-outline" />
+                </ListItemIcon>
+                <ListItemText>Approve</ListItemText>
               </MenuItem>
             );
           },
