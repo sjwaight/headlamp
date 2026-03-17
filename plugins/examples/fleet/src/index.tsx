@@ -3210,54 +3210,78 @@ function RolloutStrategyDetails() {
                 style={{
                   border: '1px solid rgba(127,127,127,0.35)',
                   borderRadius: '8px',
-                  padding: '0.9rem',
                   background: 'rgba(127,127,127,0.06)',
+                  display: 'flex',
+                  overflow: 'hidden',
                 }}
               >
                 <div
                   style={{
                     display: 'flex',
                     alignItems: 'center',
-                    gap: '0.6rem',
-                    marginBottom: '0.6rem',
+                    justifyContent: 'center',
+                    writingMode: 'vertical-rl',
+                    transform: 'rotate(180deg)',
+                    padding: '0.6rem 0.45rem',
+                    background: 'rgba(25, 118, 210, 0.08)',
+                    borderRight: '1px solid rgba(127,127,127,0.2)',
+                    fontWeight: 800,
+                    fontSize: '0.7rem',
+                    letterSpacing: '0.25em',
+                    color: '#1976d2',
+                    textTransform: 'uppercase',
+                    userSelect: 'none',
+                    flexShrink: 0,
                   }}
                 >
+                  STAGE
+                </div>
+                <div style={{ padding: '0.9rem', flex: 1, minWidth: 0 }}>
                   <div
                     style={{
-                      width: '2rem',
-                      height: '2rem',
-                      borderRadius: '50%',
-                      background: '#1976d2',
-                      color: '#fff',
                       display: 'flex',
                       alignItems: 'center',
-                      justifyContent: 'center',
-                      fontWeight: 700,
-                      fontSize: '0.85rem',
-                      flexShrink: 0,
+                      gap: '0.6rem',
+                      marginBottom: '0.6rem',
                     }}
                   >
-                    {index + 1}
+                    <div
+                      style={{
+                        width: '2rem',
+                        height: '2rem',
+                        borderRadius: '50%',
+                        background: '#1976d2',
+                        color: '#fff',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        fontWeight: 700,
+                        fontSize: '0.85rem',
+                        flexShrink: 0,
+                      }}
+                    >
+                      {index + 1}
+                    </div>
+                    <Typography variant="subtitle1" sx={{ fontWeight: 700 }}>
+                      {stage?.name ?? 'Unnamed stage'}
+                    </Typography>
                   </div>
-                  <Typography variant="subtitle1" sx={{ fontWeight: 700 }}>
-                    {stage?.name ?? 'Unnamed stage'}
-                  </Typography>
-                </div>
-                <div style={{ display: 'grid', gap: '0.35rem', paddingLeft: '2.6rem' }}>
-                  <div>
-                    <strong>Cluster Selector Labels:</strong> {renderLabelSelectorChips(stage)}
-                  </div>
-                  <div>
-                    <strong>Sorting Label Key:</strong> {stage?.sortingLabelKey ?? 'none'}
-                  </div>
-                  <div>
-                    <strong>Before Stage Tasks:</strong> {renderTaskList(stage?.beforeStageTasks)}
-                  </div>
-                  <div>
-                    <strong>After Stage Tasks:</strong> {renderTaskList(stage?.afterStageTasks)}
-                  </div>
-                  <div>
-                    <strong>Max Concurrency:</strong> {formatMaxConcurrency(stage)}
+                  <div style={{ display: 'grid', gap: '0.35rem', paddingLeft: '2.6rem' }}>
+                    <div>
+                      <strong>Cluster Selector Labels:</strong> {renderLabelSelectorChips(stage)}
+                    </div>
+                    <div>
+                      <strong>Sorting Label Key:</strong> {stage?.sortingLabelKey ?? 'none'}
+                    </div>
+                    <div>
+                      <strong>Before Stage Tasks:</strong> {renderTaskList(stage?.beforeStageTasks)}
+                    </div>
+                    <div>
+                      <strong>After Stage Tasks:</strong> {renderTaskList(stage?.afterStageTasks)}
+                    </div>
+                    <div>
+                      <strong>Max Concurrency:</strong> {formatMaxConcurrency(stage)}
+                    </div>
                   </div>
                 </div>
               </div>
