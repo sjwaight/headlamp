@@ -34,9 +34,11 @@ import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
 import Chip from '@mui/material/Chip';
 import FormControl from '@mui/material/FormControl';
+import IconButton from '@mui/material/IconButton';
 import InputLabel from '@mui/material/InputLabel';
 import ListItemIcon from '@mui/material/ListItemIcon';
 import ListItemText from '@mui/material/ListItemText';
+import Menu from '@mui/material/Menu';
 import MenuItem from '@mui/material/MenuItem';
 import Select from '@mui/material/Select';
 import Typography from '@mui/material/Typography';
@@ -2233,54 +2235,54 @@ function getRolloutRunStatusApiPath(item: any): string {
 function getApprovalWaitingStage(
   item: any
 ): { stageName: string; approvalRequestName: string } | null {
-  const status = item?.jsonData?.status ?? {};
-  const rawStages =
-    status?.stagesStatus ??
-    status?.stageStatuses ??
-    status?.stages ??
-    status?.runStatus?.stagesStatus ??
-    status?.runStatus?.stageStatuses ??
-    [];
-  if (!Array.isArray(rawStages)) return null;
-
-  for (const stage of rawStages) {
-    const beforeTasks: any[] = Array.isArray(stage?.beforeStageTaskStatus)
-      ? stage.beforeStageTaskStatus
-      : [];
-    for (const task of beforeTasks) {
-      const conditions: any[] = Array.isArray(task?.conditions) ? task.conditions : [];
-      const hasApprovalCreated = conditions.some(
-        (c: any) =>
-          String(c?.type ?? '') === 'ApprovalRequestCreated' && String(c?.status ?? '') === 'True'
-      );
-      if (hasApprovalCreated) {
-        const stageName: string = stage?.stageName ?? stage?.name ?? stage?.stage ?? '';
-        const runName: string = item?.getName?.() ?? '';
-        // The approval request name is stored in the task entry when present,
-        // otherwise falls back to the Fleet naming convention: {run}-{stage}.
-        const approvalRequestName: string =
-          task?.name ?? (stageName ? `${runName}-${stageName}` : runName);
-        return { stageName, approvalRequestName };
+  const parsed = parseStagesStatus(getStagesStatusArray(item));
+  for (const stage of parsed) {
+    if (stage.stageStatus === 'waiting' && stage.waitingFor === 'Approval') {
+      if (stage.approvalRequestName) {
+        return { stageName: stage.stageName, approvalRequestName: stage.approvalRequestName };
       }
+      // Fallback naming convention: {runName}-{stageName}
+      const runName: string = item?.getName?.() ?? '';
+      const name = stage.stageName ? `${runName}-${stage.stageName}` : runName;
+      return { stageName: stage.stageName, approvalRequestName: name };
     }
   }
   return null;
 }
 
 async function approveStageRun(item: any): Promise<void> {
-  const observedGenerationRaw = item?.jsonData?.metadata?.generation;
-  const observedGeneration = Number.isFinite(Number(observedGenerationRaw))
-    ? Number(observedGenerationRaw)
-    : 1;
+  const approvalInfo = getApprovalWaitingStage(item);
+  if (!approvalInfo) {
+    throw new Error('No stage is currently waiting for approval.');
+  }
+  await approveStageByName(item, approvalInfo.stageName, approvalInfo.approvalRequestName);
+}
+
+async function approveStageByName(
+  item: any,
+  stageName: string,
+  approvalRequestName: string
+): Promise<void> {
+  const namespace = item?.getNamespace?.();
+  const cluster = item?.cluster ?? null;
+  const plural = namespace ? 'approvalrequests' : 'clusterapprovalrequests';
+  const basePath = `/apis/placement.kubernetes-fleet.io/v1`;
+  const resourcePath = namespace
+    ? `${basePath}/namespaces/${encodeURIComponent(namespace)}/${plural}/${encodeURIComponent(
+        approvalRequestName
+      )}`
+    : `${basePath}/${plural}/${encodeURIComponent(approvalRequestName)}`;
+  const statusPath = `${resourcePath}/status`;
+
   const lastTransitionTime = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
   const patchBody = {
     status: {
       conditions: [
         {
           lastTransitionTime,
-          message: 'approvedbyuser',
-          observedGeneration,
-          reason: 'approvedbyuser',
+          message: 'ApprovedByUser',
+          observedGeneration: 1,
+          reason: 'ApprovedByUser',
           status: 'True',
           type: 'Approved',
         },
@@ -2288,12 +2290,10 @@ async function approveStageRun(item: any): Promise<void> {
     },
   };
 
-  const statusPath = getRolloutRunStatusApiPath(item);
-  const clusterName = item?.cluster ?? null;
-  console.info('Fleet Approve action patching rollout run status', {
-    run: item?.getName?.(),
-    namespace: item?.getNamespace?.() ?? '',
-    cluster: clusterName,
+  console.info('Fleet Stage Approve action patching approval request status', {
+    stage: stageName,
+    approvalRequest: approvalRequestName,
+    cluster,
     path: statusPath,
     patchBody,
   });
@@ -2301,14 +2301,45 @@ async function approveStageRun(item: any): Promise<void> {
   await ApiProxy.request(statusPath, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/merge-patch+json' },
-    cluster: clusterName,
+    cluster,
     body: JSON.stringify(patchBody),
   });
 
-  console.info('Fleet Approve action patch succeeded', {
-    run: item?.getName?.(),
-    cluster: clusterName,
+  console.info('Fleet Stage Approve action patch succeeded', {
+    stage: stageName,
+    approvalRequest: approvalRequestName,
+    cluster,
     path: statusPath,
+  });
+}
+
+async function updateStagedUpdateRunState(
+  item: any,
+  stageName: string,
+  nextState: 'Run' | 'Stop'
+): Promise<void> {
+  const patchBody = {
+    spec: {
+      State: nextState,
+      state: nextState,
+      stageName,
+    },
+  };
+
+  if (typeof item?.patch === 'function') {
+    try {
+      await item.patch(patchBody);
+      return;
+    } catch {
+      // Fall through to explicit API call.
+    }
+  }
+
+  await ApiProxy.request(getRolloutRunApiPath(item), {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/merge-patch+json' },
+    cluster: item?.cluster ?? null,
+    body: JSON.stringify(patchBody),
   });
 }
 
@@ -2334,6 +2365,285 @@ async function updateRolloutRunState(item: any, nextState: 'Run' | 'Stop'): Prom
   });
 }
 
+// ─── Stage Status Parsing Types ───────────────────────────────────────────────
+
+/** Standard Kubernetes condition. */
+interface KubeConditionEntry {
+  type: string;
+  status: string;
+  reason: string;
+  message: string;
+  lastTransitionTime: string;
+  observedGeneration?: number;
+}
+
+/** A task entry in beforeStageTaskStatus or afterStageTaskStatus. */
+interface StageTaskStatus {
+  type: 'Approval' | 'TimedWait';
+  approvalRequestName?: string;
+  conditions: KubeConditionEntry[];
+}
+
+/** A cluster entry inside a stage. */
+interface StageClusterStatus {
+  clusterName: string;
+  conditions: KubeConditionEntry[];
+  state: 'in-progress' | 'completed' | 'failed' | 'pending';
+}
+
+/** A fully parsed stage from status.stagesStatus. */
+interface ParsedStageStatus {
+  stageName: string;
+  startTime: string;
+  endTime: string;
+  conditions: KubeConditionEntry[];
+  clusters: StageClusterStatus[];
+  beforeStageTaskStatus: StageTaskStatus[];
+  afterStageTaskStatus: StageTaskStatus[];
+  stageStatus: 'succeeded' | 'stopped' | 'waiting' | 'progressing' | 'pending';
+  stageStatusMessage: string;
+  waitingFor: 'Approval' | 'TimedWait' | '';
+  approvalRequestName: string;
+  isProgressing: boolean;
+}
+
+// ─── Condition Helpers ────────────────────────────────────────────────────────
+
+function parseConditions(raw: any): KubeConditionEntry[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter((c: any) => c && typeof c === 'object')
+    .map((c: any) => ({
+      type: String(c.type ?? ''),
+      status: String(c.status ?? ''),
+      reason: String(c.reason ?? ''),
+      message: String(c.message ?? ''),
+      lastTransitionTime: String(c.lastTransitionTime ?? ''),
+      ...(c.observedGeneration !== undefined
+        ? { observedGeneration: Number(c.observedGeneration) }
+        : {}),
+    }));
+}
+
+function findCondition(
+  conditions: KubeConditionEntry[],
+  type: string
+): KubeConditionEntry | undefined {
+  return conditions.find(c => c.type === type);
+}
+
+function lastCondition(conditions: KubeConditionEntry[]): KubeConditionEntry | undefined {
+  return conditions.length > 0 ? conditions[conditions.length - 1] : undefined;
+}
+
+// ─── Task Parsing ─────────────────────────────────────────────────────────────
+
+function parseTaskStatusArray(raw: any): StageTaskStatus[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter((t: any) => t && typeof t === 'object')
+    .map((t: any) => ({
+      type: String(t.type ?? '') as StageTaskStatus['type'],
+      ...(t.approvalRequestName ? { approvalRequestName: String(t.approvalRequestName) } : {}),
+      conditions: parseConditions(t.conditions),
+    }));
+}
+
+// ─── Cluster State ────────────────────────────────────────────────────────────
+
+function deriveClusterState(
+  conditions: KubeConditionEntry[]
+): 'in-progress' | 'completed' | 'failed' | 'pending' {
+  const succeeded = findCondition(conditions, 'Succeeded');
+  if (succeeded && succeeded.status === 'True') return 'completed';
+
+  const started = findCondition(conditions, 'Started');
+  if (started && started.status === 'True') {
+    // Started but not yet succeeded — check for failure via last condition
+    const last = lastCondition(conditions);
+    if (last && /failed/i.test(last.reason)) return 'failed';
+    return 'in-progress';
+  }
+
+  // No started condition — check if any condition indicates failure
+  const last = lastCondition(conditions);
+  if (last && /failed/i.test(last.reason)) return 'failed';
+
+  return 'pending';
+}
+
+// ─── Stage Status Derivation ──────────────────────────────────────────────────
+
+function deriveStageStatus(
+  conditions: KubeConditionEntry[],
+  beforeTasks: StageTaskStatus[],
+  afterTasks: StageTaskStatus[]
+): {
+  stageStatus: ParsedStageStatus['stageStatus'];
+  stageStatusMessage: string;
+  waitingFor: 'Approval' | 'TimedWait' | '';
+  approvalRequestName: string;
+  isProgressing: boolean;
+} {
+  const last = lastCondition(conditions);
+
+  // Succeeded
+  const succeeded = findCondition(conditions, 'Succeeded');
+  if (succeeded && succeeded.status === 'True' && succeeded.reason === 'StageUpdatingSucceeded') {
+    return {
+      stageStatus: 'succeeded',
+      stageStatusMessage: succeeded.message || 'Stage update completed successfully',
+      waitingFor: '',
+      approvalRequestName: '',
+      isProgressing: false,
+    };
+  }
+
+  // Stopped
+  if (last && last.reason === 'StageUpdatingStopped') {
+    return {
+      stageStatus: 'stopped',
+      stageStatusMessage: last.message || 'Stage update stopped',
+      waitingFor: '',
+      approvalRequestName: '',
+      isProgressing: false,
+    };
+  }
+
+  // Waiting
+  if (last && last.reason === 'StageUpdatingWaiting' && last.status === 'False') {
+    // Determine what we are waiting for by inspecting task status
+    let waitingFor: 'Approval' | 'TimedWait' | '' = '';
+    let approvalRequestName = '';
+
+    // Check before-stage tasks first (approval blocks progression)
+    for (const task of beforeTasks) {
+      if (task.type === 'Approval') {
+        const created = findCondition(task.conditions, 'ApprovalRequestCreated');
+        if (created && created.status === 'True') {
+          waitingFor = 'Approval';
+          approvalRequestName = task.approvalRequestName ?? '';
+          break;
+        }
+      }
+    }
+
+    // Check after-stage tasks for approval or timed wait
+    if (!waitingFor) {
+      for (const task of afterTasks) {
+        if (task.type === 'Approval') {
+          const created = findCondition(task.conditions, 'ApprovalRequestCreated');
+          if (created && created.status === 'True') {
+            waitingFor = 'Approval';
+            approvalRequestName = task.approvalRequestName ?? '';
+            break;
+          }
+        }
+        if (task.type === 'TimedWait') {
+          const elapsed = findCondition(task.conditions, 'WaitTimeElapsed');
+          if (!elapsed || elapsed.status !== 'True') {
+            waitingFor = 'TimedWait';
+            break;
+          }
+        }
+      }
+    }
+
+    // Fall back to before-stage task types
+    if (!waitingFor) {
+      for (const task of beforeTasks) {
+        if (task.type === 'Approval') {
+          waitingFor = 'Approval';
+          approvalRequestName = task.approvalRequestName ?? '';
+          break;
+        }
+        if (task.type === 'TimedWait') {
+          waitingFor = 'TimedWait';
+          break;
+        }
+      }
+    }
+
+    // Fall back to message text
+    if (!waitingFor) {
+      const lc = last.message.toLowerCase();
+      if (lc.includes('approval')) waitingFor = 'Approval';
+      else if (lc.includes('timed') || lc.includes('wait')) waitingFor = 'TimedWait';
+    }
+
+    return {
+      stageStatus: 'waiting',
+      stageStatusMessage: last.message || 'Stage is waiting',
+      waitingFor,
+      approvalRequestName,
+      isProgressing: false,
+    };
+  }
+
+  // Progressing (Progressing condition with status=True or status=False with non-waiting reason)
+  const progressing = findCondition(conditions, 'Progressing');
+  if (progressing) {
+    return {
+      stageStatus: 'progressing',
+      stageStatusMessage: progressing.message || '',
+      waitingFor: '',
+      approvalRequestName: '',
+      isProgressing: true,
+    };
+  }
+
+  // No conditions at all — stage hasn't started yet
+  return {
+    stageStatus: 'pending',
+    stageStatusMessage: '',
+    waitingFor: '',
+    approvalRequestName: '',
+    isProgressing: false,
+  };
+}
+
+// ─── Main Parser ──────────────────────────────────────────────────────────────
+
+function parseStagesStatus(rawStagesStatus: any): ParsedStageStatus[] {
+  if (!Array.isArray(rawStagesStatus)) return [];
+
+  return rawStagesStatus
+    .filter((s: any) => s && typeof s === 'object')
+    .map((stage: any, index: number) => {
+      const stageName = String(stage.stageName ?? stage.name ?? `Stage ${index + 1}`);
+      const conditions = parseConditions(stage.conditions);
+      const beforeStageTaskStatus = parseTaskStatusArray(stage.beforeStageTaskStatus);
+      const afterStageTaskStatus = parseTaskStatusArray(stage.afterStageTaskStatus);
+
+      const rawClusters: any[] = Array.isArray(stage.clusters) ? stage.clusters : [];
+      const clusters: StageClusterStatus[] = rawClusters
+        .filter((c: any) => c && typeof c === 'object' && c.clusterName)
+        .map((c: any) => {
+          const clusterConditions = parseConditions(c.conditions);
+          return {
+            clusterName: String(c.clusterName),
+            conditions: clusterConditions,
+            state: deriveClusterState(clusterConditions),
+          };
+        });
+
+      const derived = deriveStageStatus(conditions, beforeStageTaskStatus, afterStageTaskStatus);
+
+      return {
+        stageName,
+        startTime: String(stage.startTime ?? ''),
+        endTime: String(stage.endTime ?? ''),
+        conditions,
+        clusters,
+        beforeStageTaskStatus,
+        afterStageTaskStatus,
+        ...derived,
+      };
+    });
+}
+
+// ─── Stage status rows for the details table ──────────────────────────────────
+
 type StageStatusRow = {
   id: string;
   stageName: string;
@@ -2343,476 +2653,66 @@ type StageStatusRow = {
   stageStatus: 'stopped' | 'completed' | 'waiting' | '';
   stageStatusMessage: string;
   waitingFor: 'Approval' | 'TimedWait' | '';
+  approvalRequestName: string;
+  parsed: ParsedStageStatus;
 };
 
-function normalizeClusterNames(value: any): string[] {
-  const clusterValues = Array.isArray(value) ? value : value ? [value] : [];
-
-  return clusterValues
-    .map((cluster: any) => {
-      if (typeof cluster === 'string') {
-        return cluster;
-      }
-
-      return (
-        cluster?.name ??
-        cluster?.clusterName ??
-        cluster?.cluster ??
-        cluster?.memberClusterName ??
-        ''
-      );
-    })
-    .filter((name: string) => name.length > 0);
-}
-
-function hasProgressingCondition(value: any): boolean {
-  return Array.isArray(value)
-    ? value.some(
-        (condition: any) =>
-          String(condition?.type ?? '').toLowerCase() === 'progressing' &&
-          String(condition?.status ?? '').toLowerCase() === 'true'
-      )
-    : false;
-}
-
-function collectClusterConditionTokens(cluster: any): string[] {
-  const tokens: string[] = [];
-
-  const pushToken = (value: any) => {
-    if (typeof value === 'string' && value.trim().length > 0) {
-      tokens.push(value.trim().toLowerCase());
-    }
-  };
-
-  pushToken(cluster?.reason);
-  pushToken(cluster?.type);
-  pushToken(cluster?.status);
-  pushToken(cluster?.state);
-  pushToken(cluster?.phase);
-  pushToken(cluster?.message);
-
-  if (Array.isArray(cluster?.conditions)) {
-    cluster.conditions.forEach((condition: any) => {
-      pushToken(condition?.reason);
-      pushToken(condition?.type);
-      pushToken(condition?.status);
-      pushToken(condition?.message);
-    });
-  }
-
-  return tokens;
-}
-
-function getClusterStageState(cluster: any): 'in-progress' | 'completed' | 'failed' | 'unknown' {
-  const tokens = collectClusterConditionTokens(cluster);
-  const allText = tokens.join(' ');
-
-  const hasFailed =
-    /updatingfailed|clusterupdatingfailed|\bfailed\b|\berror\b/.test(allText) ||
-    (String(cluster?.status ?? '').toLowerCase() === 'false' &&
-      /progressing|updating/.test(String(cluster?.type ?? '').toLowerCase()));
-
-  if (hasFailed) {
-    return 'failed';
-  }
-
-  const hasSucceeded =
-    /updatingsucceed|updatingsucceeded|clusterupdatingsucceed|clusterupdatingsucceeded/.test(
-      allText
-    );
-
-  if (hasSucceeded) {
-    return 'completed';
-  }
-
-  const hasStarted =
-    /updatingstart|updatingstarted|clusterupdatingstart|clusterupdatingstarted/.test(allText);
-
-  if (hasStarted) {
-    return 'in-progress';
-  }
-
-  return 'unknown';
-}
-
-function getStageWaitingMessage(stage: any): string {
-  const conditionCandidates = [
-    stage?.conditions,
-    stage?.stageConditions,
-    stage?.status?.conditions,
-  ];
-
-  for (const conditions of conditionCandidates) {
-    if (!Array.isArray(conditions) || conditions.length === 0) {
-      continue;
-    }
-
-    const lastCondition = conditions.at(-1);
-    if (
-      String(lastCondition?.reason ?? '') === 'StageUpdatingWaiting' &&
-      String(lastCondition?.type ?? '') === 'Progressing' &&
-      String(lastCondition?.status ?? '') === 'False'
-    ) {
-      return String(lastCondition?.message ?? 'Stage is waiting').trim();
-    }
-  }
-
-  return '';
-}
-
-function getStageUpdatingStoppedMessage(stage: any): string {
-  const conditionCandidates = [
-    stage?.conditions,
-    stage?.stageConditions,
-    stage?.status?.conditions,
-  ];
-
-  for (const conditions of conditionCandidates) {
-    if (!Array.isArray(conditions) || conditions.length === 0) {
-      continue;
-    }
-
-    const lastCondition = conditions.at(-1);
-    if (String(lastCondition?.reason ?? '') === 'StageUpdatingStopped') {
-      return String(lastCondition?.message ?? '').trim();
-    }
-  }
-
-  return '';
-}
-
-function getStageUpdatingSucceededMessage(stage: any): string {
-  const conditionCandidates = [
-    stage?.conditions,
-    stage?.stageConditions,
-    stage?.status?.conditions,
-  ];
-
-  for (const conditions of conditionCandidates) {
-    if (!Array.isArray(conditions) || conditions.length === 0) {
-      continue;
-    }
-
-    const lastCondition = conditions.at(-1);
-    if (
-      String(lastCondition?.reason ?? '') === 'StageUpdatingSucceeded' &&
-      String(lastCondition?.type ?? '') === 'Succeeded' &&
-      String(lastCondition?.status ?? '') === 'True'
-    ) {
-      return String(lastCondition?.message ?? 'Stage update completed successfully').trim();
-    }
-  }
-
-  return '';
-}
-
-function isProgressingStage(stage: any): boolean {
-  const explicitStatusValues = [
-    stage?.stageStatus,
-    stage?.status,
-    stage?.state,
-    stage?.phase,
-    stage?.progress?.status,
-    stage?.progress?.state,
-  ];
-
-  if (
-    explicitStatusValues.some(
-      value => typeof value === 'string' && value.trim().toLowerCase() === 'progressing'
-    )
-  ) {
-    return true;
-  }
-
+function getStagesStatusArray(item: any): any[] {
+  const status = item?.jsonData?.status ?? {};
   return (
-    hasProgressingCondition(stage?.conditions) || hasProgressingCondition(stage?.clusterStatus)
+    status?.stagesStatus ??
+    status?.stageStatuses ??
+    status?.stages ??
+    status?.runStatus?.stagesStatus ??
+    status?.runStatus?.stageStatuses ??
+    []
   );
-}
-
-function getProcessingClusters(stage: any): string[] {
-  const directCandidates = [
-    stage?.processingClusters,
-    stage?.processingClusterNames,
-    stage?.progressingClusters,
-    stage?.progressingClusterNames,
-    stage?.updatingClusters,
-    stage?.updatingClusterNames,
-    stage?.currentClusters,
-    stage?.currentClusterNames,
-    stage?.processingCluster,
-    stage?.progressingCluster,
-    stage?.updatingCluster,
-    stage?.currentCluster,
-  ];
-
-  for (const candidate of directCandidates) {
-    const names = normalizeClusterNames(candidate);
-    if (names.length > 0) {
-      return names;
-    }
-  }
-
-  const statusCandidates = [
-    stage?.clusterStatuses,
-    stage?.clustersStatus,
-    stage?.clusterStatus,
-    stage?.clusters,
-  ];
-
-  for (const candidate of statusCandidates) {
-    if (!Array.isArray(candidate)) {
-      continue;
-    }
-
-    const names = candidate
-      .filter((cluster: any) => {
-        const clusterStatusValues = [
-          cluster?.stageStatus,
-          cluster?.status,
-          cluster?.state,
-          cluster?.phase,
-          cluster?.progress?.status,
-          cluster?.progress?.state,
-        ];
-
-        return (
-          clusterStatusValues.some(
-            value => typeof value === 'string' && value.trim().toLowerCase() === 'progressing'
-          ) || hasProgressingCondition(cluster?.conditions)
-        );
-      })
-      .map((cluster: any) => {
-        return (
-          cluster?.name ??
-          cluster?.clusterName ??
-          cluster?.cluster ??
-          cluster?.memberClusterName ??
-          ''
-        );
-      })
-      .filter((name: string) => name.length > 0);
-
-    if (names.length > 0) {
-      return names;
-    }
-  }
-
-  return [];
 }
 
 function getCurrentStageName(item: any): string {
   const status = item?.jsonData?.status ?? {};
-  const rawStages: any[] =
-    status?.stagesStatus ??
-    status?.stageStatuses ??
-    status?.stages ??
-    status?.runStatus?.stagesStatus ??
-    status?.runStatus?.stageStatuses ??
-    [];
+  const parsed = parseStagesStatus(getStagesStatusArray(item));
 
-  if (!Array.isArray(rawStages) || rawStages.length === 0) {
-    return status?.stageName ?? '-';
+  if (parsed.length === 0) return status?.stageName ?? '-';
+
+  // Walk from the end; the highest-index stage with conditions is the current one.
+  for (let i = parsed.length - 1; i >= 0; i--) {
+    if (parsed[i].conditions.length > 0) return parsed[i].stageName;
   }
 
-  // Walk from the end; the highest-index stage that has a non-empty conditions array
-  // is the currently active (or most-recently active) stage.
-  for (let i = rawStages.length - 1; i >= 0; i--) {
-    const stage = rawStages[i];
-    const conditions =
-      stage?.conditions ?? stage?.status?.conditions ?? stage?.stageStatus?.conditions ?? [];
-    if (Array.isArray(conditions) && conditions.length > 0) {
-      return (
-        stage?.stageName ?? stage?.name ?? stage?.stage ?? stage?.stageRef?.name ?? `Stage ${i + 1}`
-      );
-    }
-  }
-
-  // Fallback: status-level field or first stage name
-  if (status?.stageName) {
-    return status.stageName;
-  }
-  const first = rawStages[0];
-  return first?.stageName ?? first?.name ?? first?.stage ?? first?.stageRef?.name ?? '-';
-}
-
-function getWaitingTaskType(
-  item: any,
-  stageName: string,
-  message: string,
-  stageEntry?: any
-): 'Approval' | 'TimedWait' | '' {
-  // Highest priority: an ApprovalRequest has been created for a before-stage task
-  // (beforeStageTaskStatus contains a condition type=ApprovalRequestCreated, status=True).
-  if (stageEntry) {
-    const beforeTaskStatus: any[] = Array.isArray(stageEntry?.beforeStageTaskStatus)
-      ? stageEntry.beforeStageTaskStatus
-      : [];
-    const approvalCreated = beforeTaskStatus.some((task: any) =>
-      (Array.isArray(task?.conditions) ? task.conditions : []).some(
-        (c: any) =>
-          String(c?.type ?? '') === 'ApprovalRequestCreated' && String(c?.status ?? '') === 'True'
-      )
-    );
-    if (approvalCreated) {
-      return 'Approval';
-    }
-  }
-
-  // Next, check task-type fields directly on the stage status entry.
-  if (stageEntry) {
-    const allTasks = [
-      ...(Array.isArray(stageEntry?.beforeStageTasks) ? stageEntry.beforeStageTasks : []),
-      ...(Array.isArray(stageEntry?.afterStageTasks) ? stageEntry.afterStageTasks : []),
-      ...(Array.isArray(stageEntry?.afterStageTaskStatus) ? stageEntry.afterStageTaskStatus : []),
-    ];
-    if (allTasks.some((t: any) => String(t?.type ?? '').toLowerCase() === 'approval')) {
-      return 'Approval';
-    }
-    if (allTasks.some((t: any) => String(t?.type ?? '').toLowerCase() === 'timedwait')) {
-      return 'TimedWait';
-    }
-  }
-
-  // Fall back to the strategy snapshot's task definitions for the matching stage.
-  const strategyStages: any[] = item?.jsonData?.spec?.stagedUpdateStrategySnapshot?.stages ?? [];
-  const matchingStage = strategyStages.find((s: any) => (s?.name ?? s?.stageName) === stageName);
-
-  if (matchingStage) {
-    const allTasks = [
-      ...(Array.isArray(matchingStage?.beforeStageTasks) ? matchingStage.beforeStageTasks : []),
-      ...(Array.isArray(matchingStage?.afterStageTasks) ? matchingStage.afterStageTasks : []),
-    ];
-    if (allTasks.some((t: any) => String(t?.type ?? '').toLowerCase() === 'approval')) {
-      return 'Approval';
-    }
-    if (allTasks.some((t: any) => String(t?.type ?? '').toLowerCase() === 'timedwait')) {
-      return 'TimedWait';
-    }
-  }
-
-  // Fall back to message text.
-  const lc = message.toLowerCase();
-  if (lc.includes('approval')) {
-    return 'Approval';
-  }
-  if (lc.includes('timed') || lc.includes('wait')) {
-    return 'TimedWait';
-  }
-  return '';
+  return status?.stageName ?? parsed[0]?.stageName ?? '-';
 }
 
 function getStageStatusRows(item: any): StageStatusRow[] {
-  const status = item?.jsonData?.status ?? {};
+  const parsed = parseStagesStatus(getStagesStatusArray(item));
 
-  // Check run-level waiting condition once, before mapping stages.
-  const runConditions: any[] = Array.isArray(status?.conditions) ? status.conditions : [];
-  const lastRunCondition = runConditions.length > 0 ? runConditions.at(-1) : null;
-  const runIsWaiting =
-    String(lastRunCondition?.reason ?? '') === 'UpdateRunWaiting' &&
-    String(lastRunCondition?.type ?? '') === 'Progressing' &&
-    String(lastRunCondition?.status ?? '') === 'False';
-  const currentRunStageName: string = status?.stageName ?? '';
-  const runWaitingMessage = runIsWaiting
-    ? String(lastRunCondition?.message ?? 'Stage is waiting').trim()
-    : '';
-
-  const rawStages =
-    status?.stagesStatus ??
-    status?.stageStatuses ??
-    status?.stages ??
-    status?.runStatus?.stagesStatus ??
-    status?.runStatus?.stageStatuses ??
-    [];
-
-  if (!Array.isArray(rawStages)) {
-    return [];
-  }
-
-  return rawStages.map((stage: any, index: number) => {
-    const stageName =
-      stage?.stageName ??
-      stage?.name ??
-      stage?.stage ??
-      stage?.stageRef?.name ??
-      `Stage ${index + 1}`;
-
-    const selectedClusterNames =
-      stage?.selectedClusters ??
-      stage?.selectedClusterNames ??
-      stage?.clusterNames ??
-      stage?.clusters ??
-      stage?.targetClusters ??
-      stage?.selected?.clusters ??
-      [];
-
-    const clusterNames = normalizeClusterNames(selectedClusterNames);
-
+  return parsed.map((stage, index) => {
     const clusterStates: Record<string, 'in-progress' | 'completed' | 'failed' | 'unknown'> = {};
-    const stageClusters = Array.isArray(stage?.clusters) ? stage.clusters : [];
+    const clusterNames: string[] = [];
 
-    stageClusters.forEach((cluster: any) => {
-      const clusterName =
-        cluster?.clusterName ?? cluster?.name ?? cluster?.memberClusterName ?? cluster?.cluster;
-
-      if (typeof clusterName !== 'string' || clusterName.length === 0) {
-        return;
-      }
-
-      clusterStates[clusterName] = getClusterStageState(cluster);
+    stage.clusters.forEach(c => {
+      clusterNames.push(c.clusterName);
+      clusterStates[c.clusterName] =
+        c.state === 'pending' ? 'unknown' : (c.state as 'in-progress' | 'completed' | 'failed');
     });
 
-    const processingClusters = getProcessingClusters(stage);
-    processingClusters.forEach(clusterName => {
-      clusterStates[clusterName] = 'in-progress';
-    });
-
-    clusterNames.forEach(clusterName => {
-      if (!clusterStates[clusterName]) {
-        clusterStates[clusterName] = 'unknown';
-      }
-    });
-
-    const combinedClusterNames = Array.from(
-      new Set([...clusterNames, ...Object.keys(clusterStates)])
-    );
-
-    const isProgressing =
-      isProgressingStage(stage) ||
-      Object.values(clusterStates).some(clusterState => clusterState === 'in-progress');
-    const stageStoppedMessage = getStageUpdatingStoppedMessage(stage);
-    const stageSucceededMessage = getStageUpdatingSucceededMessage(stage);
-    const stageWaitingMessageLocal = getStageWaitingMessage(stage);
-
-    // Run-level waiting takes priority when this stage is the current one.
-    const isRunLevelWaiting =
-      runIsWaiting && currentRunStageName.length > 0 && stageName === currentRunStageName;
-    const effectiveWaitingMessage = isRunLevelWaiting
-      ? runWaitingMessage
-      : stageWaitingMessageLocal;
-
-    const stageStatusMessage =
-      stageStoppedMessage || stageSucceededMessage || effectiveWaitingMessage;
-    const stageStatus: StageStatusRow['stageStatus'] = stageStoppedMessage
-      ? 'stopped'
-      : stageSucceededMessage
-      ? 'completed'
-      : effectiveWaitingMessage
-      ? 'waiting'
-      : '';
-    const waitingFor: StageStatusRow['waitingFor'] =
-      stageStatus === 'waiting'
-        ? getWaitingTaskType(item, stageName, effectiveWaitingMessage, stage)
-        : '';
+    // Map parsed stageStatus to the table row's status enum
+    let stageStatus: StageStatusRow['stageStatus'] = '';
+    if (stage.stageStatus === 'succeeded') stageStatus = 'completed';
+    else if (stage.stageStatus === 'stopped') stageStatus = 'stopped';
+    else if (stage.stageStatus === 'waiting') stageStatus = 'waiting';
 
     return {
-      id: `${stageName}-${index}`,
-      stageName,
-      selectedClusters: combinedClusterNames,
+      id: `${stage.stageName}-${index}`,
+      stageName: stage.stageName,
+      selectedClusters: clusterNames,
       clusterStates,
-      isProgressing,
+      isProgressing: stage.isProgressing,
       stageStatus,
-      stageStatusMessage,
-      waitingFor,
+      stageStatusMessage: stage.stageStatusMessage,
+      waitingFor: stageStatus === 'waiting' ? stage.waitingFor : '',
+      approvalRequestName: stage.approvalRequestName,
+      parsed: stage,
     };
   });
 }
@@ -3099,6 +2999,98 @@ function RolloutRunDetails() {
                         borderRight: row.original.isProgressing ? `1px solid #5e92f3` : undefined,
                       },
                     }),
+                  },
+                  {
+                    id: 'actions',
+                    header: 'Actions',
+                    accessorFn: () => '',
+                    Cell: ({ row }) => {
+                      const stage = row.original;
+                      const [anchorEl, setAnchorEl] = useState<null | HTMLElement>(null);
+
+                      const handleMenuOpen = (event: React.MouseEvent<HTMLButtonElement>) => {
+                        setAnchorEl(event.currentTarget);
+                      };
+
+                      const handleMenuClose = () => {
+                        setAnchorEl(null);
+                      };
+
+                      const handleStart = async () => {
+                        handleMenuClose();
+                        try {
+                          await updateStagedUpdateRunState(item, stage.stageName, 'Run');
+                          window.location.reload();
+                        } catch (error: any) {
+                          window.alert(
+                            error?.message || `Unable to start stage ${stage.stageName}.`
+                          );
+                        }
+                      };
+
+                      const handleStop = async () => {
+                        handleMenuClose();
+                        try {
+                          await updateStagedUpdateRunState(item, stage.stageName, 'Stop');
+                          window.location.reload();
+                        } catch (error: any) {
+                          window.alert(
+                            error?.message || `Unable to stop stage ${stage.stageName}.`
+                          );
+                        }
+                      };
+
+                      const approvalRequestName = stage.approvalRequestName || null;
+                      const canApprove = !!approvalRequestName;
+
+                      const handleApprove = async () => {
+                        handleMenuClose();
+                        try {
+                          await approveStageByName(item, stage.stageName, approvalRequestName!);
+                          window.location.reload();
+                        } catch (error: any) {
+                          window.alert(
+                            error?.message || `Unable to approve stage ${stage.stageName}.`
+                          );
+                        }
+                      };
+
+                      return (
+                        <>
+                          <IconButton
+                            size="small"
+                            onClick={handleMenuOpen}
+                            aria-label="stage actions"
+                          >
+                            <Icon icon="mdi:dots-vertical" />
+                          </IconButton>
+                          <Menu
+                            anchorEl={anchorEl}
+                            open={Boolean(anchorEl)}
+                            onClose={handleMenuClose}
+                          >
+                            <MenuItem onClick={() => void handleStart()}>
+                              <ListItemIcon>
+                                <Icon icon="mdi:play" />
+                              </ListItemIcon>
+                              <ListItemText>Start</ListItemText>
+                            </MenuItem>
+                            <MenuItem onClick={() => void handleStop()}>
+                              <ListItemIcon>
+                                <Icon icon="mdi:stop" />
+                              </ListItemIcon>
+                              <ListItemText>Stop</ListItemText>
+                            </MenuItem>
+                            <MenuItem disabled={!canApprove} onClick={() => void handleApprove()}>
+                              <ListItemIcon>
+                                <Icon icon="mdi:account-check-outline" />
+                              </ListItemIcon>
+                              <ListItemText>Approve</ListItemText>
+                            </MenuItem>
+                          </Menu>
+                        </>
+                      );
+                    },
                   },
                 ]}
                 emptyMessage="No stage status found."
