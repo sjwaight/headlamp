@@ -2069,6 +2069,20 @@ function getRolloutRunStatusDisplay(item: any): {
   }
 
   if (
+    String(lastCondition?.reason ?? '') === 'UpdateRunWaiting' &&
+    String(lastCondition?.type ?? '') === 'Progressing' &&
+    String(lastCondition?.status ?? '') === 'False'
+  ) {
+    const message = lastCondition?.message ?? 'Update run is waiting';
+
+    return {
+      label: 'Waiting',
+      status: 'warning',
+      detailedStatus: message,
+    };
+  }
+
+  if (
     String(lastCondition?.reason ?? '') === 'UpdateRunStopped' &&
     String(lastCondition?.type ?? '') === 'Progressing' &&
     String(lastCondition?.status ?? '') === 'False'
@@ -2151,16 +2165,39 @@ function makeRolloutRunStatusLabel(item: any) {
     return '-';
   }
 
+  const isWaiting = statusDisplay.label === 'Waiting';
+
   return (
     <Box display="flex" alignItems="center" gap={1}>
       <LightTooltip title={statusDisplay.detailedStatus} interactive>
         <Box display="inline">
-          <StatusLabel status={statusDisplay.status}>
-            {(statusDisplay.status === 'warning' || statusDisplay.status === 'error') && (
-              <Icon aria-label="hidden" icon="mdi:alert-outline" width="1.2rem" height="1.2rem" />
-            )}
-            {statusDisplay.label}
-          </StatusLabel>
+          {isWaiting ? (
+            <Box
+              component="span"
+              sx={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '4px',
+                px: '6px',
+                py: '2px',
+                borderRadius: '4px',
+                backgroundColor: '#e65100',
+                color: '#fff',
+                fontSize: '0.75rem',
+                fontWeight: 600,
+              }}
+            >
+              <Icon aria-label="hidden" icon="mdi:timer-sand" width="1.1rem" height="1.1rem" />
+              Waiting
+            </Box>
+          ) : (
+            <StatusLabel status={statusDisplay.status}>
+              {(statusDisplay.status === 'warning' || statusDisplay.status === 'error') && (
+                <Icon aria-label="hidden" icon="mdi:alert-outline" width="1.2rem" height="1.2rem" />
+              )}
+              {statusDisplay.label}
+            </StatusLabel>
+          )}
         </Box>
       </LightTooltip>
     </Box>
@@ -2217,8 +2254,9 @@ type StageStatusRow = {
   selectedClusters: string[];
   clusterStates: Record<string, 'in-progress' | 'completed' | 'failed' | 'unknown'>;
   isProgressing: boolean;
-  stageStatus: 'stopped' | 'completed' | '';
+  stageStatus: 'stopped' | 'completed' | 'waiting' | '';
   stageStatusMessage: string;
+  waitingFor: 'Approval' | 'TimedWait' | '';
 };
 
 function normalizeClusterNames(value: any): string[] {
@@ -2309,6 +2347,31 @@ function getClusterStageState(cluster: any): 'in-progress' | 'completed' | 'fail
   }
 
   return 'unknown';
+}
+
+function getStageWaitingMessage(stage: any): string {
+  const conditionCandidates = [
+    stage?.conditions,
+    stage?.stageConditions,
+    stage?.status?.conditions,
+  ];
+
+  for (const conditions of conditionCandidates) {
+    if (!Array.isArray(conditions) || conditions.length === 0) {
+      continue;
+    }
+
+    const lastCondition = conditions.at(-1);
+    if (
+      String(lastCondition?.reason ?? '') === 'StageUpdatingWaiting' &&
+      String(lastCondition?.type ?? '') === 'Progressing' &&
+      String(lastCondition?.status ?? '') === 'False'
+    ) {
+      return String(lastCondition?.message ?? 'Stage is waiting').trim();
+    }
+  }
+
+  return '';
 }
 
 function getStageUpdatingStoppedMessage(stage: any): string {
@@ -2451,8 +2514,105 @@ function getProcessingClusters(stage: any): string[] {
   return [];
 }
 
+function getCurrentStageName(item: any): string {
+  const status = item?.jsonData?.status ?? {};
+  const rawStages: any[] =
+    status?.stagesStatus ??
+    status?.stageStatuses ??
+    status?.stages ??
+    status?.runStatus?.stagesStatus ??
+    status?.runStatus?.stageStatuses ??
+    [];
+
+  if (!Array.isArray(rawStages) || rawStages.length === 0) {
+    return status?.stageName ?? '-';
+  }
+
+  // Walk from the end; the highest-index stage that has a non-empty conditions array
+  // is the currently active (or most-recently active) stage.
+  for (let i = rawStages.length - 1; i >= 0; i--) {
+    const stage = rawStages[i];
+    const conditions =
+      stage?.conditions ?? stage?.status?.conditions ?? stage?.stageStatus?.conditions ?? [];
+    if (Array.isArray(conditions) && conditions.length > 0) {
+      return (
+        stage?.stageName ?? stage?.name ?? stage?.stage ?? stage?.stageRef?.name ?? `Stage ${i + 1}`
+      );
+    }
+  }
+
+  // Fallback: status-level field or first stage name
+  if (status?.stageName) {
+    return status.stageName;
+  }
+  const first = rawStages[0];
+  return first?.stageName ?? first?.name ?? first?.stage ?? first?.stageRef?.name ?? '-';
+}
+
+function getWaitingTaskType(
+  item: any,
+  stageName: string,
+  message: string,
+  stageEntry?: any
+): 'Approval' | 'TimedWait' | '' {
+  // First, check tasks directly on the stage status entry (beforeStageTasks /
+  // afterStageTasks / afterStageTaskStatus are present in the API response).
+  if (stageEntry) {
+    const allTasks = [
+      ...(Array.isArray(stageEntry?.beforeStageTasks) ? stageEntry.beforeStageTasks : []),
+      ...(Array.isArray(stageEntry?.afterStageTasks) ? stageEntry.afterStageTasks : []),
+      ...(Array.isArray(stageEntry?.afterStageTaskStatus) ? stageEntry.afterStageTaskStatus : []),
+    ];
+    if (allTasks.some((t: any) => String(t?.type ?? '').toLowerCase() === 'approval')) {
+      return 'Approval';
+    }
+    if (allTasks.some((t: any) => String(t?.type ?? '').toLowerCase() === 'timedwait')) {
+      return 'TimedWait';
+    }
+  }
+
+  // Fall back to the strategy snapshot's task definitions for the matching stage.
+  const strategyStages: any[] = item?.jsonData?.spec?.stagedUpdateStrategySnapshot?.stages ?? [];
+  const matchingStage = strategyStages.find((s: any) => (s?.name ?? s?.stageName) === stageName);
+
+  if (matchingStage) {
+    const allTasks = [
+      ...(Array.isArray(matchingStage?.beforeStageTasks) ? matchingStage.beforeStageTasks : []),
+      ...(Array.isArray(matchingStage?.afterStageTasks) ? matchingStage.afterStageTasks : []),
+    ];
+    if (allTasks.some((t: any) => String(t?.type ?? '').toLowerCase() === 'approval')) {
+      return 'Approval';
+    }
+    if (allTasks.some((t: any) => String(t?.type ?? '').toLowerCase() === 'timedwait')) {
+      return 'TimedWait';
+    }
+  }
+
+  // Fall back to message text.
+  const lc = message.toLowerCase();
+  if (lc.includes('approval')) {
+    return 'Approval';
+  }
+  if (lc.includes('timed') || lc.includes('wait')) {
+    return 'TimedWait';
+  }
+  return '';
+}
+
 function getStageStatusRows(item: any): StageStatusRow[] {
   const status = item?.jsonData?.status ?? {};
+
+  // Check run-level waiting condition once, before mapping stages.
+  const runConditions: any[] = Array.isArray(status?.conditions) ? status.conditions : [];
+  const lastRunCondition = runConditions.length > 0 ? runConditions.at(-1) : null;
+  const runIsWaiting =
+    String(lastRunCondition?.reason ?? '') === 'UpdateRunWaiting' &&
+    String(lastRunCondition?.type ?? '') === 'Progressing' &&
+    String(lastRunCondition?.status ?? '') === 'False';
+  const currentRunStageName: string = status?.stageName ?? '';
+  const runWaitingMessage = runIsWaiting
+    ? String(lastRunCondition?.message ?? 'Stage is waiting').trim()
+    : '';
 
   const rawStages =
     status?.stagesStatus ??
@@ -2519,12 +2679,28 @@ function getStageStatusRows(item: any): StageStatusRow[] {
       Object.values(clusterStates).some(clusterState => clusterState === 'in-progress');
     const stageStoppedMessage = getStageUpdatingStoppedMessage(stage);
     const stageSucceededMessage = getStageUpdatingSucceededMessage(stage);
-    const stageStatusMessage = stageStoppedMessage || stageSucceededMessage;
+    const stageWaitingMessageLocal = getStageWaitingMessage(stage);
+
+    // Run-level waiting takes priority when this stage is the current one.
+    const isRunLevelWaiting =
+      runIsWaiting && currentRunStageName.length > 0 && stageName === currentRunStageName;
+    const effectiveWaitingMessage = isRunLevelWaiting
+      ? runWaitingMessage
+      : stageWaitingMessageLocal;
+
+    const stageStatusMessage =
+      stageStoppedMessage || stageSucceededMessage || effectiveWaitingMessage;
     const stageStatus: StageStatusRow['stageStatus'] = stageStoppedMessage
       ? 'stopped'
       : stageSucceededMessage
       ? 'completed'
+      : effectiveWaitingMessage
+      ? 'waiting'
       : '';
+    const waitingFor: StageStatusRow['waitingFor'] =
+      stageStatus === 'waiting'
+        ? getWaitingTaskType(item, stageName, effectiveWaitingMessage, stage)
+        : '';
 
     return {
       id: `${stageName}-${index}`,
@@ -2534,6 +2710,7 @@ function getStageStatusRows(item: any): StageStatusRow[] {
       isProgressing,
       stageStatus,
       stageStatusMessage,
+      waitingFor,
     };
   });
 }
@@ -2682,7 +2859,61 @@ function RolloutRunDetails() {
                         );
                       }
 
+                      if (stage.stageStatus === 'waiting') {
+                        return (
+                          <LightTooltip
+                            title={stage.stageStatusMessage || 'Stage is waiting'}
+                            interactive
+                          >
+                            <Box
+                              component="span"
+                              sx={{
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '4px',
+                                px: '6px',
+                                py: '2px',
+                                borderRadius: '4px',
+                                backgroundColor: '#e65100',
+                                color: '#fff',
+                                fontSize: '0.75rem',
+                                fontWeight: 600,
+                              }}
+                            >
+                              <Icon icon="mdi:timer-sand" width="1.1rem" height="1.1rem" />
+                              Waiting
+                            </Box>
+                          </LightTooltip>
+                        );
+                      }
+
                       return '-';
+                    },
+                    muiTableBodyCellProps: ({ row }) => ({
+                      sx: {
+                        backgroundColor: row.original.isProgressing
+                          ? 'rgba(13, 71, 161, 0.12)'
+                          : undefined,
+                      },
+                    }),
+                  },
+                  {
+                    id: 'waitingFor',
+                    header: 'Waiting For',
+                    accessorFn: stage => stage.waitingFor || '-',
+                    Cell: ({ row }) => {
+                      const { waitingFor } = row.original;
+                      if (!waitingFor) {
+                        return '-';
+                      }
+                      const icon =
+                        waitingFor === 'Approval' ? 'mdi:account-check-outline' : 'mdi:timer-sand';
+                      return (
+                        <Box display="flex" alignItems="center" gap={0.5}>
+                          <Icon icon={icon} width="1.1rem" height="1.1rem" />
+                          {waitingFor}
+                        </Box>
+                      );
                     },
                     muiTableBodyCellProps: ({ row }) => ({
                       sx: {
@@ -2949,12 +3180,60 @@ function RolloutRuns() {
         },
         {
           label: 'Current Stage',
-          getValue: (item: any) => item.jsonData?.status?.stageName ?? '-',
+          getValue: (item: any) => getCurrentStageName(item),
         },
         {
           label: 'Status',
           getValue: (item: any) => getRolloutRunStatusDisplay(item).label,
           render: (item: any) => makeRolloutRunStatusLabel(item),
+        },
+        {
+          label: 'Waiting For',
+          getValue: (item: any) => {
+            const conditions = item?.jsonData?.status?.conditions;
+            const lastCondition =
+              Array.isArray(conditions) && conditions.length > 0 ? conditions.at(-1) : null;
+            if (
+              String(lastCondition?.reason ?? '') !== 'UpdateRunWaiting' ||
+              String(lastCondition?.type ?? '') !== 'Progressing' ||
+              String(lastCondition?.status ?? '') !== 'False'
+            ) {
+              return '-';
+            }
+            const msg = String(lastCondition?.message ?? '').toLowerCase();
+            if (msg.includes('approval')) {
+              return 'Approval';
+            }
+            if (msg.includes('timed') || msg.includes('wait')) {
+              return 'TimedWait';
+            }
+            return 'Waiting';
+          },
+          render: (item: any) => {
+            const conditions = item?.jsonData?.status?.conditions;
+            const lastCondition =
+              Array.isArray(conditions) && conditions.length > 0 ? conditions.at(-1) : null;
+            if (
+              String(lastCondition?.reason ?? '') !== 'UpdateRunWaiting' ||
+              String(lastCondition?.type ?? '') !== 'Progressing' ||
+              String(lastCondition?.status ?? '') !== 'False'
+            ) {
+              return '-';
+            }
+            const msg = String(lastCondition?.message ?? '').toLowerCase();
+            const taskType = msg.includes('approval')
+              ? 'Approval'
+              : msg.includes('timed') || msg.includes('wait')
+              ? 'TimedWait'
+              : 'Waiting';
+            const icon = taskType === 'Approval' ? 'mdi:account-check-outline' : 'mdi:timer-sand';
+            return (
+              <Box display="flex" alignItems="center" gap={0.5}>
+                <Icon icon={icon} width="1.1rem" height="1.1rem" />
+                {taskType}
+              </Box>
+            );
+          },
         },
         'age',
       ]}
