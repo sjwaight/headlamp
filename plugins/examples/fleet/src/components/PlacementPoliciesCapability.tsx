@@ -203,8 +203,9 @@ export function PlacementPoliciesCapability({
     <>
       <SectionBox title="Resource Placements">
         <Typography variant="body2" sx={{ mb: 2 }}>
-          Placements select Kubernetes resources staged on the hub cluster to distribute to member
-          clusters. Member clusters are chosen using the policy defined in the placement.
+          Resource placements select Kubernetes resources staged on the hub cluster to distribute to
+          member clusters. Member clusters are chosen based on the policy specified in the
+          placement.
         </Typography>
         {hasSelectorFilter && (
           <SectionBox title="Active Filter">
@@ -287,6 +288,29 @@ export function PlacementPoliciesCapability({
               {
                 label: 'Rollout Strategy',
                 getValue: (item: any) => getPlacementStrategyType(item),
+              },
+              {
+                label: 'Last Transition',
+                getValue: (item: any) => {
+                  const conditions = item?.jsonData?.status?.conditions;
+                  if (!Array.isArray(conditions) || conditions.length === 0) {
+                    return '';
+                  }
+                  return conditions[conditions.length - 1]?.lastTransitionTime || '';
+                },
+                render: (item: any) => {
+                  const conditions = item?.jsonData?.status?.conditions;
+                  if (!Array.isArray(conditions) || conditions.length === 0) {
+                    return '-';
+                  }
+                  const lastTransition = conditions[conditions.length - 1]?.lastTransitionTime;
+                  if (!lastTransition) {
+                    return '-';
+                  }
+                  return new Date(lastTransition).toLocaleString(undefined, {
+                    timeZoneName: 'short',
+                  });
+                },
               },
               {
                 label: 'Age',
