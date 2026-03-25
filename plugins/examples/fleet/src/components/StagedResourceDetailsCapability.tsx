@@ -307,7 +307,7 @@ export function StagedResourceDetailsCapability() {
           },
           {
             id: 'placementPolicies',
-            header: 'Placement Policies',
+            header: 'Placements',
             accessorFn: () => 'View matching policies',
             Cell: ({ row }) => {
               const resource = row.original as NamespaceResourceRow;

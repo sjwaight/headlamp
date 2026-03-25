@@ -65,16 +65,24 @@ export function RolloutRunsCapability({
   getRolloutRunStatusApiPath,
 }: Props) {
   const location = useLocation();
-  const strategyFilter = new URLSearchParams(location.search).get('strategy') || '';
+  const searchParams = new URLSearchParams(location.search);
+  const strategyFilter = searchParams.get('strategy') || '';
+  const placementFilter = searchParams.get('placement') || '';
 
   const allRuns =
     clusterRolloutRuns && rolloutRuns ? [...clusterRolloutRuns, ...rolloutRuns] : null;
-  const mergedRolloutRuns =
+  const filteredByStrategy =
     allRuns && strategyFilter
       ? allRuns.filter(
           (item: any) => (item.jsonData?.spec?.stagedRolloutStrategyName ?? '') === strategyFilter
         )
       : allRuns;
+  const mergedRolloutRuns =
+    filteredByStrategy && placementFilter
+      ? filteredByStrategy.filter(
+          (item: any) => (item.jsonData?.spec?.placementName ?? '') === placementFilter
+        )
+      : filteredByStrategy;
 
   return (
     <>
@@ -82,6 +90,16 @@ export function RolloutRunsCapability({
         <SectionBox title="Active Filter">
           <Typography variant="body2">
             Showing only rollout runs using strategy <strong>{strategyFilter}</strong>.
+          </Typography>
+          <Box mt={1}>
+            <Link routeName="fleet-rollout-runs">Clear filter</Link>
+          </Box>
+        </SectionBox>
+      )}
+      {placementFilter && (
+        <SectionBox title="Active Filter">
+          <Typography variant="body2">
+            Showing only rollout runs for placement <strong>{placementFilter}</strong>.
           </Typography>
           <Box mt={1}>
             <Link routeName="fleet-rollout-runs">Clear filter</Link>

@@ -14,8 +14,12 @@
  * limitations under the License.
  */
 
+import { Icon } from '@iconify/react';
 import { Link, ResourceListView, SectionBox } from '@kinvolk/headlamp-plugin/lib/CommonComponents';
 import Box from '@mui/material/Box';
+import ListItemIcon from '@mui/material/ListItemIcon';
+import ListItemText from '@mui/material/ListItemText';
+import MenuItem from '@mui/material/MenuItem';
 import Typography from '@mui/material/Typography';
 import { useLocation } from 'react-router-dom';
 
@@ -102,7 +106,7 @@ export function PlacementPoliciesCapability({
       {hasSelectorFilter && (
         <SectionBox title="Active Filter">
           <Typography variant="body2">
-            Showing only placement policies that select <strong>{selectedKind}</strong>{' '}
+            Showing only placements that select <strong>{selectedKind}</strong>{' '}
             <strong>{selectedName}</strong> ({selectorApiVersion}) within {selectorScope}.
           </Typography>
           <Box mt={1}>
@@ -111,7 +115,7 @@ export function PlacementPoliciesCapability({
         </SectionBox>
       )}
       <ResourceListView
-        title="Placement Policies"
+        title="Placements"
         data={filteredPlacements}
         columns={[
           {
@@ -170,6 +174,31 @@ export function PlacementPoliciesCapability({
           {
             label: 'Rollout Strategy',
             getValue: (item: any) => getPlacementStrategyType(item),
+          },
+        ]}
+        actions={[
+          {
+            id: 'view-staged-rollouts',
+            action: ({ item, closeMenu }: { item: any; closeMenu: () => void }) => {
+              const placementName = item.getName();
+              const isExternal = getPlacementStrategyType(item) === 'External';
+
+              return (
+                <MenuItem
+                  key="view-staged-rollouts"
+                  disabled={!isExternal}
+                  component={isExternal ? (Link as any) : 'li'}
+                  routeName={isExternal ? 'fleet-rollout-runs' : undefined}
+                  search={isExternal ? { placement: placementName } : undefined}
+                  onClick={isExternal ? closeMenu : undefined}
+                >
+                  <ListItemIcon>
+                    <Icon icon="mdi:format-list-bulleted" />
+                  </ListItemIcon>
+                  <ListItemText>View staged rollouts</ListItemText>
+                </MenuItem>
+              );
+            },
           },
         ]}
       />
