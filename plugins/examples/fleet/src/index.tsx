@@ -178,7 +178,7 @@ registerSidebarEntry({
 registerSidebarEntry({
   parent: 'fleet',
   name: 'fleet-placement-policies',
-  label: 'Placements',
+  label: 'Resource Placements',
   url: '/fleet/placement-policies',
 });
 

@@ -201,7 +201,7 @@ export function PlacementPoliciesCapability({
 
   return (
     <>
-      <SectionBox title="Placements">
+      <SectionBox title="Resource Placements">
         <Typography variant="body2" sx={{ mb: 2 }}>
           Placements select Kubernetes resources staged on the hub cluster to distribute to member
           clusters. Member clusters are chosen using the policy defined in the placement.
