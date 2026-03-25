@@ -34,6 +34,7 @@ import { FleetConfigurationCapability } from './components/FleetConfigurationCap
 import { MemberClustersCapability } from './components/MemberClustersCapability';
 import { PlacementPoliciesCapability } from './components/PlacementPoliciesCapability';
 import { PlacementPolicyDetailsCapability } from './components/PlacementPolicyDetailsCapability';
+import { PlacementStatusCapability } from './components/PlacementStatusCapability';
 import { ResourceOverridesCapability } from './components/ResourceOverridesCapability';
 import { RolloutRunDetailsCapability } from './components/RolloutRunDetailsCapability';
 import { RolloutRunsCapability } from './components/RolloutRunsCapability';
@@ -592,6 +593,15 @@ function ResourcePlacementDetails() {
       getPlacementPolicyType={getPlacementPolicyType}
       makePlacementStatusLabel={makePlacementStatusLabel}
       formatObjectSummary={formatObjectSummary}
+    />
+  );
+}
+
+function PlacementStatus() {
+  return (
+    <PlacementStatusCapability
+      clusterResourcePlacementClass={ClusterResourcePlacement}
+      resourcePlacementClass={ResourcePlacement}
     />
   );
 }
@@ -1683,6 +1693,22 @@ registerRoute({
   name: 'fleet-placement-policy-details-cluster',
   exact: true,
   component: ResourcePlacementDetails,
+});
+
+registerRoute({
+  path: '/fleet/placement-policies/:scope/:placementName/status',
+  sidebar: 'fleet-placement-policies',
+  name: 'fleet-placement-status-cluster',
+  exact: true,
+  component: PlacementStatus,
+});
+
+registerRoute({
+  path: '/fleet/placement-policies/:scope/:namespace/:placementName/status',
+  sidebar: 'fleet-placement-policies',
+  name: 'fleet-placement-status-namespace',
+  exact: true,
+  component: PlacementStatus,
 });
 
 registerRoute({

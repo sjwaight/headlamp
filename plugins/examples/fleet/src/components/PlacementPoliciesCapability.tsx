@@ -115,6 +115,16 @@ export function PlacementPoliciesCapability({
     return conditions.find((condition: any) => condition?.type === scheduledConditionType) || null;
   }
 
+  function getSelectedClusterCount(item: any): number | null {
+    const condition = getSchedulingCompletedCondition(item);
+    if (!condition) {
+      return null;
+    }
+    const message = String(condition?.message || '');
+    const match = message.match(/found (\d+) cluster/);
+    return match ? parseInt(match[1], 10) : null;
+  }
+
   function getSchedulingCompletedDisplay(item: any): {
     label: string;
     status: 'success' | 'warning' | 'error' | '';
@@ -193,8 +203,8 @@ export function PlacementPoliciesCapability({
     <>
       <SectionBox title="Placements">
         <Typography variant="body2" sx={{ mb: 2 }}>
-          Placements define the Kubernetes resources to be distributed and the policy to use for
-          selecting member clusters to which the resources should be applied.
+          Placements select Kubernetes resources staged on the hub cluster to distribute to member
+          clusters. Member clusters are chosen using the policy defined in the placement.
         </Typography>
         {hasSelectorFilter && (
           <SectionBox title="Active Filter">
@@ -207,106 +217,147 @@ export function PlacementPoliciesCapability({
             </Box>
           </SectionBox>
         )}
-        <ResourceListView
-          title=""
-          headerProps={{ titleSideActions: [] }}
-          data={filteredPlacements}
-          columns={[
-            {
-              label: 'Name',
-              getValue: (item: any) => item.getName(),
-              render: (item: any) => {
-                const scope = getPlacementScope(item);
-                const name = item.getName();
-                const namespace = item.getNamespace?.();
-                const params =
-                  scope === 'Namespace' && namespace
-                    ? { scope: 'namespace', namespace, placementName: name }
-                    : { scope: 'cluster', placementName: name };
-                const routeName =
-                  scope === 'Namespace' && namespace
-                    ? 'fleet-placement-policy-details-namespace'
-                    : 'fleet-placement-policy-details-cluster';
+        <Box mx={-2}>
+          <ResourceListView
+            title={<></>}
+            headerProps={{ titleSideActions: [] }}
+            data={filteredPlacements}
+            columns={[
+              {
+                label: 'Name',
+                getValue: (item: any) => item.getName(),
+                render: (item: any) => {
+                  const scope = getPlacementScope(item);
+                  const name = item.getName();
+                  const namespace = item.getNamespace?.();
+                  const params =
+                    scope === 'Namespace' && namespace
+                      ? { scope: 'namespace', namespace, placementName: name }
+                      : { scope: 'cluster', placementName: name };
+                  const routeName =
+                    scope === 'Namespace' && namespace
+                      ? 'fleet-placement-policy-details-namespace'
+                      : 'fleet-placement-policy-details-cluster';
 
-                return (
-                  <Link routeName={routeName} params={params}>
-                    {name}
-                  </Link>
-                );
+                  return (
+                    <Link routeName={routeName} params={params}>
+                      {name}
+                    </Link>
+                  );
+                },
               },
-            },
-            {
-              label: 'Scope',
-              getValue: (item: any) => item.getNamespace?.() || 'Cluster',
-              render: (item: any) => {
-                const namespace = item.getNamespace?.();
+              {
+                label: 'Scope',
+                getValue: (item: any) => item.getNamespace?.() || 'Cluster',
+                render: (item: any) => {
+                  const namespace = item.getNamespace?.();
 
-                if (!namespace) {
-                  return 'Cluster';
-                }
+                  if (!namespace) {
+                    return 'Cluster';
+                  }
 
-                return (
-                  <Link
-                    routeName="namespace"
-                    params={{ name: namespace }}
-                    activeCluster={item.cluster}
-                  >
-                    {namespace}
-                  </Link>
-                );
+                  return (
+                    <Link
+                      routeName="namespace"
+                      params={{ name: namespace }}
+                      activeCluster={item.cluster}
+                    >
+                      {namespace}
+                    </Link>
+                  );
+                },
               },
-            },
-            {
-              label: 'Policy',
-              getValue: (item: any) => getPlacementPolicyType(item),
-            },
-            {
-              label: 'Cluster Selection',
-              getValue: (item: any) => getSchedulingCompletedDisplay(item).label,
-              render: (item: any) => makeSchedulingCompletedLabel(item),
-            },
-            {
-              label: 'Rollout Strategy',
-              getValue: (item: any) => getPlacementStrategyType(item),
-            },
-            {
-              label: 'Age',
-              getValue: (item: any) => item?.jsonData?.metadata?.creationTimestamp || '',
-              render: (item: any) => {
-                const creationTimestamp = item?.jsonData?.metadata?.creationTimestamp;
-                if (!creationTimestamp) {
-                  return '-';
-                }
-                return <DateLabel date={creationTimestamp} format="mini" />;
+              {
+                label: 'Policy',
+                getValue: (item: any) => getPlacementPolicyType(item),
               },
-            },
-          ]}
-          actions={[
-            {
-              id: 'view-staged-rollouts',
-              action: ({ item, closeMenu }: { item: any; closeMenu: () => void }) => {
-                const placementName = item.getName();
-                const isExternal = getPlacementStrategyType(item) === 'External';
+              {
+                label: 'Cluster Selection',
+                getValue: (item: any) => getSchedulingCompletedDisplay(item).label,
+                render: (item: any) => makeSchedulingCompletedLabel(item),
+              },
+              {
+                label: 'Cluster count',
+                getValue: (item: any) => getSelectedClusterCount(item) ?? '',
+                render: (item: any) => {
+                  const count = getSelectedClusterCount(item);
+                  return count !== null ? count : '-';
+                },
+              },
+              {
+                label: 'Rollout Strategy',
+                getValue: (item: any) => getPlacementStrategyType(item),
+              },
+              {
+                label: 'Age',
+                getValue: (item: any) => item?.jsonData?.metadata?.creationTimestamp || '',
+                render: (item: any) => {
+                  const creationTimestamp = item?.jsonData?.metadata?.creationTimestamp;
+                  if (!creationTimestamp) {
+                    return '-';
+                  }
+                  return <DateLabel date={creationTimestamp} format="mini" />;
+                },
+              },
+            ]}
+            actions={[
+              {
+                id: 'view-placement-status',
+                action: ({ item, closeMenu }: { item: any; closeMenu: () => void }) => {
+                  const placementName = item.getName();
+                  const scope = getPlacementScope(item);
+                  const namespace = item.getNamespace?.();
+                  const params =
+                    scope === 'Namespace' && namespace
+                      ? { scope: 'namespace', namespace, placementName }
+                      : { scope: 'cluster', placementName };
+                  const routeName =
+                    scope === 'Namespace' && namespace
+                      ? 'fleet-placement-status-namespace'
+                      : 'fleet-placement-status-cluster';
 
-                return (
-                  <MenuItem
-                    key="view-staged-rollouts"
-                    disabled={!isExternal}
-                    component={isExternal ? (Link as any) : 'li'}
-                    routeName={isExternal ? 'fleet-rollout-runs' : undefined}
-                    search={isExternal ? { placement: placementName } : undefined}
-                    onClick={isExternal ? closeMenu : undefined}
-                  >
-                    <ListItemIcon>
-                      <Icon icon="mdi:format-list-bulleted" />
-                    </ListItemIcon>
-                    <ListItemText>View staged rollouts</ListItemText>
-                  </MenuItem>
-                );
+                  return (
+                    <MenuItem
+                      key="view-placement-status"
+                      component={Link as any}
+                      routeName={routeName}
+                      params={params}
+                      onClick={closeMenu}
+                    >
+                      <ListItemIcon>
+                        <Icon icon="mdi:clipboard-list-outline" />
+                      </ListItemIcon>
+                      <ListItemText>View placement status</ListItemText>
+                    </MenuItem>
+                  );
+                },
               },
-            },
-          ]}
-        />
+              {
+                id: 'view-staged-rollouts',
+                action: ({ item, closeMenu }: { item: any; closeMenu: () => void }) => {
+                  const placementName = item.getName();
+                  const isExternal = getPlacementStrategyType(item) === 'External';
+
+                  return (
+                    <MenuItem
+                      key="view-staged-rollouts"
+                      disabled={!isExternal}
+                      component={isExternal ? (Link as any) : 'li'}
+                      routeName={isExternal ? 'fleet-rollout-runs' : undefined}
+                      search={isExternal ? { placement: placementName } : undefined}
+                      onClick={isExternal ? closeMenu : undefined}
+                    >
+                      <ListItemIcon>
+                        <Icon icon="mdi:format-list-bulleted" />
+                      </ListItemIcon>
+                      <ListItemText>View staged rollouts</ListItemText>
+                    </MenuItem>
+                  );
+                },
+              },
+            ]}
+          />
+        </Box>
       </SectionBox>
     </>
   );

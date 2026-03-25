@@ -16,9 +16,9 @@
 
 import {
   DetailsGrid,
+  Link,
   SectionBox,
   SimpleTable,
-  Table,
 } from '@kinvolk/headlamp-plugin/lib/CommonComponents';
 import * as yaml from 'js-yaml';
 import { useParams } from 'react-router-dom';
@@ -47,19 +47,6 @@ function formatConditions(conditions: any[] | undefined): string {
   return conditions
     .map(condition => `${condition?.type ?? 'Unknown'}=${condition?.status ?? '-'}`)
     .join(', ');
-}
-
-function getPrimaryCondition(entry: any): any {
-  const conditions = Array.isArray(entry?.conditions) ? entry.conditions : [];
-  if (conditions.length === 0) {
-    return null;
-  }
-
-  return (
-    conditions.find((condition: any) => String(condition?.status) === 'False') ||
-    conditions.find((condition: any) => String(condition?.status) === 'Unknown') ||
-    conditions[0]
-  );
 }
 
 function formatPolicyDetails(item: any, getPlacementPolicyType: (item: any) => string) {
@@ -173,12 +160,23 @@ export function PlacementPolicyDetailsCapability({
             value: makePlacementStatusLabel(item),
           },
           {
-            name: 'Cluster Names',
-            value:
-              Array.isArray(item.jsonData?.status?.targetClusters) &&
-              item.jsonData.status.targetClusters.length > 0
-                ? item.jsonData.status.targetClusters.join(', ')
-                : '-',
+            name: 'Placement Status',
+            value: (() => {
+              const statusParams =
+                isNamespaceScope && namespace
+                  ? { scope: 'namespace', namespace, placementName }
+                  : { scope: 'cluster', placementName };
+              const statusRouteName =
+                isNamespaceScope && namespace
+                  ? 'fleet-placement-status-namespace'
+                  : 'fleet-placement-status-cluster';
+
+              return (
+                <Link routeName={statusRouteName} params={statusParams}>
+                  View Placement Status
+                </Link>
+              );
+            })(),
           },
           {
             name: 'Conditions',
@@ -257,67 +255,6 @@ export function PlacementPolicyDetailsCapability({
                   },
                 ]}
                 emptyMessage="No conditions found."
-              />
-            </SectionBox>
-          ),
-        },
-        {
-          id: 'fleet.resource-placement-placement-status',
-          section: (
-            <SectionBox title="Placement Status">
-              <Table<any>
-                data={(
-                  item?.jsonData?.status?.placementstatuses ??
-                  item?.jsonData?.status?.placementStatuses ??
-                  []
-                ).map((statusEntry: any, index: number) => ({
-                  ...statusEntry,
-                  __id:
-                    statusEntry?.clusterName || statusEntry?.cluster || statusEntry?.name
-                      ? `${
-                          statusEntry?.clusterName || statusEntry?.cluster || statusEntry?.name
-                        }-${index}`
-                      : `placement-status-${index}`,
-                }))}
-                getRowId={statusEntry => statusEntry.__id}
-                rowsPerPage={[10, 25, 50]}
-                columns={[
-                  {
-                    id: 'cluster',
-                    header: 'Picked Cluster',
-                    accessorFn: statusEntry =>
-                      statusEntry?.clusterName || statusEntry?.cluster || statusEntry?.name || '-',
-                  },
-                  {
-                    id: 'status',
-                    header: 'Status',
-                    accessorFn: statusEntry => {
-                      const primaryCondition = getPrimaryCondition(statusEntry);
-                      return primaryCondition?.status || '-';
-                    },
-                  },
-                  {
-                    id: 'conditions',
-                    header: 'Conditions',
-                    accessorFn: statusEntry => formatConditions(statusEntry?.conditions),
-                  },
-                  {
-                    id: 'reason',
-                    header: 'Reason',
-                    accessorFn: statusEntry => getPrimaryCondition(statusEntry)?.reason || '-',
-                  },
-                  {
-                    id: 'message',
-                    header: 'Message',
-                    accessorFn: statusEntry => getPrimaryCondition(statusEntry)?.message || '-',
-                  },
-                  {
-                    id: 'lastTransitionTime',
-                    header: 'Last Transition Time',
-                    accessorFn: statusEntry =>
-                      getPrimaryCondition(statusEntry)?.lastTransitionTime || '-',
-                  },
-                ]}
               />
             </SectionBox>
           ),
