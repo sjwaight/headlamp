@@ -30,6 +30,7 @@ import Typography from '@mui/material/Typography';
 import * as yaml from 'js-yaml';
 import { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
+import { CreateStagedUpdateRunForm } from './components/CreateStagedUpdateRunForm';
 import { FleetConfigurationCapability } from './components/FleetConfigurationCapability';
 import { MemberClustersCapability } from './components/MemberClustersCapability';
 import { PlacementPoliciesCapability } from './components/PlacementPoliciesCapability';
@@ -1603,21 +1604,33 @@ function RolloutStrategyDetails() {
 function RolloutRuns() {
   const [clusterRolloutRuns] = ClusterStagedUpdateRun.useList();
   const [rolloutRuns] = StagedUpdateRun.useList();
+  const hubCluster = getStoredHubCluster();
 
   return (
-    <RolloutRunsCapability
-      clusterRolloutRuns={clusterRolloutRuns}
-      rolloutRuns={rolloutRuns}
-      getRolloutRunScope={getRolloutRunScope}
-      getCurrentStageName={getCurrentStageName}
-      getRolloutRunStatusDisplay={getRolloutRunStatusDisplay}
-      makeRolloutRunStatusLabel={makeRolloutRunStatusLabel}
-      getStageStatusRows={getStageStatusRows}
-      updateRolloutRunState={updateRolloutRunState}
-      approveStageRun={approveStageRun}
-      getApprovalWaitingStage={getApprovalWaitingStage}
-      getRolloutRunStatusApiPath={getRolloutRunStatusApiPath}
-    />
+    <>
+      <CreateStagedUpdateRunForm
+        clusterResourcePlacementClass={ClusterResourcePlacement}
+        resourcePlacementClass={ResourcePlacement}
+        clusterStagedUpdateStrategyClass={ClusterStagedUpdateStrategy}
+        stagedUpdateStrategyClass={StagedUpdateStrategy}
+        clusterStagedUpdateRunClass={ClusterStagedUpdateRun}
+        stagedUpdateRunClass={StagedUpdateRun}
+        hubCluster={hubCluster}
+      />
+      <RolloutRunsCapability
+        clusterRolloutRuns={clusterRolloutRuns}
+        rolloutRuns={rolloutRuns}
+        getRolloutRunScope={getRolloutRunScope}
+        getCurrentStageName={getCurrentStageName}
+        getRolloutRunStatusDisplay={getRolloutRunStatusDisplay}
+        makeRolloutRunStatusLabel={makeRolloutRunStatusLabel}
+        getStageStatusRows={getStageStatusRows}
+        updateRolloutRunState={updateRolloutRunState}
+        approveStageRun={approveStageRun}
+        getApprovalWaitingStage={getApprovalWaitingStage}
+        getRolloutRunStatusApiPath={getRolloutRunStatusApiPath}
+      />
+    </>
   );
 }
 
