@@ -89,7 +89,7 @@ export function RolloutRunsCapability({
       {strategyFilter && (
         <SectionBox title="Active Filter">
           <Typography variant="body2">
-            Showing only rollout runs using strategy <strong>{strategyFilter}</strong>.
+            Showing only staged rollout runs using strategy <strong>{strategyFilter}</strong>.
           </Typography>
           <Box mt={1}>
             <Link routeName="fleet-rollout-runs">Clear filter</Link>
@@ -99,7 +99,7 @@ export function RolloutRunsCapability({
       {placementFilter && (
         <SectionBox title="Active Filter">
           <Typography variant="body2">
-            Showing only rollout runs for placement <strong>{placementFilter}</strong>.
+            Showing only staged rollout runs for placement <strong>{placementFilter}</strong>.
           </Typography>
           <Box mt={1}>
             <Link routeName="fleet-rollout-runs">Clear filter</Link>
@@ -107,7 +107,7 @@ export function RolloutRunsCapability({
         </SectionBox>
       )}
       <ResourceListView
-        title="Rollout Runs"
+        title="Staged Rollout Runs"
         data={mergedRolloutRuns}
         columns={[
           {
