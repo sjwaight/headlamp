@@ -22,22 +22,34 @@ import {
   SectionBox,
 } from '@kinvolk/headlamp-plugin/lib/CommonComponents';
 import Box from '@mui/material/Box';
+import IconButton from '@mui/material/IconButton';
 import ListItemIcon from '@mui/material/ListItemIcon';
 import ListItemText from '@mui/material/ListItemText';
 import MenuItem from '@mui/material/MenuItem';
+import Tooltip from '@mui/material/Tooltip';
 import Typography from '@mui/material/Typography';
 import { useState } from 'react';
 import { useLocation } from 'react-router-dom';
 import { ApprovalDialog } from './ApprovalDialog';
+import { CreateStagedUpdateRunForm } from './CreateStagedUpdateRunForm';
 
 type StageStatusRow = {
   waitingFor: 'Approval' | 'TimedWait' | '';
   stageStatus: 'stopped' | 'completed' | 'waiting' | '';
 };
 
+type CreateFormProps = {
+  clusterResourcePlacementClass?: any;
+  resourcePlacementClass?: any;
+  clusterStagedUpdateStrategyClass?: any;
+  stagedUpdateStrategyClass?: any;
+  hubCluster?: string;
+};
+
 type Props = {
   clusterRolloutRuns: any[] | null;
   rolloutRuns: any[] | null;
+  createFormProps?: CreateFormProps;
   getRolloutRunScope: (item: any) => 'Cluster' | 'Namespace';
   getCurrentStageName: (item: any) => string;
   getRolloutRunStatusDisplay: (item: any) => {
@@ -56,6 +68,7 @@ type Props = {
 export function RolloutRunsCapability({
   clusterRolloutRuns,
   rolloutRuns,
+  createFormProps,
   getRolloutRunScope,
   getCurrentStageName,
   getRolloutRunStatusDisplay,
@@ -74,6 +87,7 @@ export function RolloutRunsCapability({
   const [rolloutToApprove, setRolloutToApprove] = useState<any | null>(null);
   const [isSubmittingApproval, setIsSubmittingApproval] = useState(false);
   const [approvalFormError, setApprovalFormError] = useState('');
+  const [isCreateOpen, setIsCreateOpen] = useState(false);
 
   const allRuns =
     clusterRolloutRuns && rolloutRuns ? [...clusterRolloutRuns, ...rolloutRuns] : null;
@@ -115,6 +129,23 @@ export function RolloutRunsCapability({
       <ResourceListView
         title="Staged Rollout Runs"
         data={mergedRolloutRuns}
+        headerProps={
+          createFormProps
+            ? {
+                titleSideActions: [
+                  <Tooltip key="create" title="Create Staged Rollout Run">
+                    <IconButton
+                      aria-label="Create Staged Rollout Run"
+                      size="medium"
+                      onClick={() => setIsCreateOpen(true)}
+                    >
+                      <Icon icon="mdi:plus-circle" color="primary" />
+                    </IconButton>
+                  </Tooltip>,
+                ],
+              }
+            : undefined
+        }
         columns={[
           {
             label: 'Run Name',
@@ -384,6 +415,18 @@ export function RolloutRunsCapability({
           isSubmitting={isSubmittingApproval}
           error={approvalFormError}
           title="Approve Stage"
+        />
+      )}
+
+      {createFormProps && (
+        <CreateStagedUpdateRunForm
+          open={isCreateOpen}
+          onClose={() => setIsCreateOpen(false)}
+          clusterResourcePlacementClass={createFormProps.clusterResourcePlacementClass}
+          resourcePlacementClass={createFormProps.resourcePlacementClass}
+          clusterStagedUpdateStrategyClass={createFormProps.clusterStagedUpdateStrategyClass}
+          stagedUpdateStrategyClass={createFormProps.stagedUpdateStrategyClass}
+          hubCluster={createFormProps.hubCluster}
         />
       )}
     </>

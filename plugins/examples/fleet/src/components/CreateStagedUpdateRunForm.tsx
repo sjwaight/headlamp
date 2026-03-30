@@ -15,21 +15,25 @@
  */
 
 import { ApiProxy, K8s } from '@kinvolk/headlamp-plugin/lib';
-import { SectionBox } from '@kinvolk/headlamp-plugin/lib/CommonComponents';
 import Alert from '@mui/material/Alert';
 import Box from '@mui/material/Box';
 import Button from '@mui/material/Button';
 import Checkbox from '@mui/material/Checkbox';
 import CircularProgress from '@mui/material/CircularProgress';
+import Dialog from '@mui/material/Dialog';
+import DialogActions from '@mui/material/DialogActions';
+import DialogContent from '@mui/material/DialogContent';
+import DialogTitle from '@mui/material/DialogTitle';
 import FormControlLabel from '@mui/material/FormControlLabel';
 import MenuItem from '@mui/material/MenuItem';
 import TextField from '@mui/material/TextField';
 import * as yaml from 'js-yaml';
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 
 type Scope = 'Cluster' | 'Namespace';
 
 type Props = {
+  open: boolean;
   clusterResourcePlacementClass?: any;
   resourcePlacementClass?: any;
   clusterStagedUpdateStrategyClass?: any;
@@ -42,6 +46,7 @@ type Props = {
 };
 
 export function CreateStagedUpdateRunForm({
+  open,
   clusterResourcePlacementClass,
   resourcePlacementClass,
   clusterStagedUpdateStrategyClass,
@@ -60,6 +65,21 @@ export function CreateStagedUpdateRunForm({
   const [success, setSuccess] = useState('');
   const [showYaml, setShowYaml] = useState(false);
   const [generatedYaml, setGeneratedYaml] = useState('');
+
+  // Reset form state when dialog closes
+  useEffect(() => {
+    if (!open) {
+      setScope('Cluster');
+      setSelectedPlacement('');
+      setSelectedStrategy('');
+      setStartImmediately(false);
+      setNamespace(defaultNamespace);
+      setError('');
+      setSuccess('');
+      setShowYaml(false);
+      setGeneratedYaml('');
+    }
+  }, [open, defaultNamespace]);
 
   // Fetch all resources unconditionally
   const [clusterPlacements] = clusterResourcePlacementClass?.useList?.() ?? [];
@@ -189,157 +209,161 @@ export function CreateStagedUpdateRunForm({
   const strategyList = strategies?.filter((s: any) => s?.metadata?.name) ?? [];
 
   return (
-    <SectionBox title="Create Staged Rollout Run">
-      <Box
-        sx={{
-          display: 'flex',
-          flexDirection: 'column',
-          gap: 2,
-          maxWidth: 600,
-        }}
-      >
-        {/* Error Alert */}
-        {error && <Alert severity="error">{error}</Alert>}
-
-        {/* Success Alert */}
-        {success && <Alert severity="success">{success}</Alert>}
-
-        {/* Scope Selection */}
-        <TextField
-          select
-          label="Scope"
-          value={scope}
-          onChange={e => {
-            setScope(e.target.value as Scope);
-            setSelectedPlacement('');
-            setSelectedStrategy('');
-            setError('');
+    <Dialog open={open} onClose={onClose} fullWidth maxWidth="sm">
+      <DialogTitle>Create Staged Rollout Run</DialogTitle>
+      <DialogContent>
+        <Box
+          sx={{
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 2,
+            pt: 1,
           }}
-          fullWidth
-          size="small"
         >
-          <MenuItem value="Cluster">Cluster</MenuItem>
-          <MenuItem value="Namespace">Namespace</MenuItem>
-        </TextField>
+          {/* Error Alert */}
+          {error && <Alert severity="error">{error}</Alert>}
 
-        {/* Namespace Selection (only for Namespace scope) */}
-        {scope === 'Namespace' && (
+          {/* Success Alert */}
+          {success && <Alert severity="success">{success}</Alert>}
+
+          {/* Scope Selection */}
           <TextField
             select
-            label="Namespace"
-            value={namespace}
-            onChange={e => setNamespace(e.target.value)}
+            label="Scope"
+            value={scope}
+            onChange={e => {
+              setScope(e.target.value as Scope);
+              setSelectedPlacement('');
+              setSelectedStrategy('');
+              setError('');
+            }}
             fullWidth
             size="small"
           >
-            {availableNamespaces.map(ns => (
-              <MenuItem key={ns} value={ns}>
-                {ns}
+            <MenuItem value="Cluster">Cluster</MenuItem>
+            <MenuItem value="Namespace">Namespace</MenuItem>
+          </TextField>
+
+          {/* Namespace Selection (only for Namespace scope) */}
+          {scope === 'Namespace' && (
+            <TextField
+              select
+              label="Namespace"
+              value={namespace}
+              onChange={e => setNamespace(e.target.value)}
+              fullWidth
+              size="small"
+            >
+              {availableNamespaces.map(ns => (
+                <MenuItem key={ns} value={ns}>
+                  {ns}
+                </MenuItem>
+              ))}
+            </TextField>
+          )}
+
+          {/* Placement Selection */}
+          <TextField
+            select
+            label="Resource Placement"
+            value={selectedPlacement}
+            onChange={e => {
+              setSelectedPlacement(e.target.value);
+              setError('');
+            }}
+            fullWidth
+            size="small"
+            disabled={placementList.length === 0}
+            helperText={
+              placementList.length === 0
+                ? `No ${scope === 'Cluster' ? 'Cluster' : ''}ResourcePlacements available`
+                : ''
+            }
+          >
+            {placementList.map((placement: any) => (
+              <MenuItem key={placement.metadata?.uid} value={placement.metadata?.name}>
+                {placement.metadata?.name}
               </MenuItem>
             ))}
           </TextField>
-        )}
 
-        {/* Placement Selection */}
-        <TextField
-          select
-          label="Resource Placement"
-          value={selectedPlacement}
-          onChange={e => {
-            setSelectedPlacement(e.target.value);
-            setError('');
-          }}
-          fullWidth
-          size="small"
-          disabled={placementList.length === 0}
-          helperText={
-            placementList.length === 0
-              ? `No ${scope === 'Cluster' ? 'Cluster' : ''}ResourcePlacements available`
-              : ''
-          }
-        >
-          {placementList.map((placement: any) => (
-            <MenuItem key={placement.metadata?.uid} value={placement.metadata?.name}>
-              {placement.metadata?.name}
-            </MenuItem>
-          ))}
-        </TextField>
-
-        {/* Strategy Selection */}
-        <TextField
-          select
-          label="Staged Rollout Strategy"
-          value={selectedStrategy}
-          onChange={e => {
-            setSelectedStrategy(e.target.value);
-            setError('');
-          }}
-          fullWidth
-          size="small"
-          disabled={strategyList.length === 0}
-          helperText={
-            strategyList.length === 0
-              ? `No ${scope === 'Cluster' ? 'Cluster' : ''}StagedUpdateStrategies available`
-              : ''
-          }
-        >
-          {strategyList.map((strategy: any) => (
-            <MenuItem key={strategy.metadata?.uid} value={strategy.metadata?.name}>
-              {strategy.metadata?.name}
-            </MenuItem>
-          ))}
-        </TextField>
-
-        {/* Start Immediately Checkbox */}
-        <FormControlLabel
-          control={
-            <Checkbox
-              checked={startImmediately}
-              onChange={e => setStartImmediately(e.target.checked)}
-            />
-          }
-          label="Start immediately (set state to Run, otherwise Initialize)"
-        />
-
-        {/* Action Buttons */}
-        <Box sx={{ display: 'flex', gap: 1, justifyContent: 'flex-end' }} mt={2}>
-          <Button
-            variant="outlined"
-            onClick={handleGenerateYaml}
-            disabled={isLoading || !selectedPlacement || !selectedStrategy}
-          >
-            Generate YAML
-          </Button>
-          <Button
-            variant="contained"
-            color="primary"
-            onClick={handleApply}
-            disabled={isLoading || !selectedPlacement || !selectedStrategy}
-          >
-            {isLoading ? <CircularProgress size={24} /> : 'Apply'}
-          </Button>
-        </Box>
-
-        {/* YAML Preview */}
-        {showYaml && generatedYaml && (
-          <Box
-            sx={{
-              backgroundColor: '#f5f5f5',
-              border: '1px solid #ddd',
-              borderRadius: 1,
-              p: 2,
-              fontFamily: 'monospace',
-              fontSize: '0.875rem',
-              maxHeight: 300,
-              overflow: 'auto',
-              whiteSpace: 'pre-wrap',
-              wordBreak: 'break-word',
+          {/* Strategy Selection */}
+          <TextField
+            select
+            label="Staged Rollout Strategy"
+            value={selectedStrategy}
+            onChange={e => {
+              setSelectedStrategy(e.target.value);
+              setError('');
             }}
+            fullWidth
+            size="small"
+            disabled={strategyList.length === 0}
+            helperText={
+              strategyList.length === 0
+                ? `No ${scope === 'Cluster' ? 'Cluster' : ''}StagedUpdateStrategies available`
+                : ''
+            }
           >
-            {generatedYaml}
-          </Box>
-        )}
-      </Box>
-    </SectionBox>
+            {strategyList.map((strategy: any) => (
+              <MenuItem key={strategy.metadata?.uid} value={strategy.metadata?.name}>
+                {strategy.metadata?.name}
+              </MenuItem>
+            ))}
+          </TextField>
+
+          {/* Start Immediately Checkbox */}
+          <FormControlLabel
+            control={
+              <Checkbox
+                checked={startImmediately}
+                onChange={e => setStartImmediately(e.target.checked)}
+              />
+            }
+            label="Start immediately (set state to Run, otherwise Initialize)"
+          />
+
+          {/* YAML Preview */}
+          {showYaml && generatedYaml && (
+            <Box
+              sx={{
+                backgroundColor: '#f5f5f5',
+                border: '1px solid #ddd',
+                borderRadius: 1,
+                p: 2,
+                fontFamily: 'monospace',
+                fontSize: '0.875rem',
+                maxHeight: 300,
+                overflow: 'auto',
+                whiteSpace: 'pre-wrap',
+                wordBreak: 'break-word',
+              }}
+            >
+              {generatedYaml}
+            </Box>
+          )}
+        </Box>
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={onClose} disabled={isLoading}>
+          Cancel
+        </Button>
+        <Button
+          variant="outlined"
+          onClick={handleGenerateYaml}
+          disabled={isLoading || !selectedPlacement || !selectedStrategy}
+        >
+          Generate YAML
+        </Button>
+        <Button
+          variant="contained"
+          color="primary"
+          onClick={() => void handleApply()}
+          disabled={isLoading || !selectedPlacement || !selectedStrategy}
+        >
+          {isLoading ? <CircularProgress size={24} /> : 'Apply'}
+        </Button>
+      </DialogActions>
+    </Dialog>
   );
 }
