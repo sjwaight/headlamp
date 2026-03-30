@@ -1,0 +1,42 @@
+name: PR Merge Commit Check
+
+on:
+  pull_request:
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - ready_for_review
+
+permissions:
+  contents: read
+
+jobs:
+  no-merge-commits:
+    name: no merge commits in PR range
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout PR head
+        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.1.7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      - name: Fail if merge commits exist in PR range
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+
+          git fetch --no-tags origin "${BASE_REF}" --depth=1
+
+          MERGES="$(git rev-list --merges "origin/${BASE_REF}..${HEAD_SHA}")"
+          if [ -n "${MERGES}" ]; then
+            echo "Merge commits found in PR commit range:"
+            git log --oneline --merges "origin/${BASE_REF}..${HEAD_SHA}"
+            exit 1
+          fi
+
+          echo "No merge commits found in PR commit range."
