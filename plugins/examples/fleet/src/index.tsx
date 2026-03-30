@@ -33,6 +33,7 @@ import { useParams } from 'react-router-dom';
 import { CreateStagedUpdateRunForm } from './components/CreateStagedUpdateRunForm';
 import { FleetConfigurationCapability } from './components/FleetConfigurationCapability';
 import { MemberClustersCapability } from './components/MemberClustersCapability';
+import { PendingApprovalsCapability } from './components/PendingApprovalsCapability';
 import { PlacementPoliciesCapability } from './components/PlacementPoliciesCapability';
 import { PlacementPolicyDetailsCapability } from './components/PlacementPolicyDetailsCapability';
 import { PlacementStatusCapability } from './components/PlacementStatusCapability';
@@ -145,6 +146,34 @@ const StagedUpdateRun = makeCustomResourceClass(
   } // namespace-scoped
 );
 
+/**
+ * ClusterApprovalRequest represents a pending approval for cluster-scoped staged updates.
+ * API: placement.kubernetes-fleet.io/v1
+ */
+const ClusterApprovalRequest = makeCustomResourceClass(
+  {
+    apiInfo: [{ group: 'placement.kubernetes-fleet.io', version: 'v1' }],
+    kind: 'ClusterApprovalRequest',
+    pluralName: 'clusterapprovalrequests',
+    singularName: 'clusterapprovalrequest',
+    isNamespaced: false,
+  } // cluster-scoped
+);
+
+/**
+ * ApprovalRequest represents a pending approval for namespace-scoped staged updates.
+ * API: placement.kubernetes-fleet.io/v1
+ */
+const ApprovalRequest = makeCustomResourceClass(
+  {
+    apiInfo: [{ group: 'placement.kubernetes-fleet.io', version: 'v1' }],
+    kind: 'ApprovalRequest',
+    pluralName: 'approvalrequests',
+    singularName: 'approvalrequest',
+    isNamespaced: true,
+  } // namespace-scoped
+);
+
 // ─── Sidebar ──────────────────────────────────────────────────────────────────
 
 registerSidebarEntry({
@@ -202,6 +231,13 @@ registerSidebarEntry({
   name: 'fleet-rollout-runs',
   label: 'Staged Rollout Runs',
   url: '/fleet/rollout-runs',
+});
+
+registerSidebarEntry({
+  parent: 'fleet',
+  name: 'fleet-pending-approvals',
+  label: 'Pending Approvals',
+  url: '/fleet/pending-approvals',
 });
 
 function getStoredHubCluster(): string {
@@ -1634,6 +1670,18 @@ function RolloutRuns() {
   );
 }
 
+function PendingApprovals() {
+  const [clusterApprovalRequests] = ClusterApprovalRequest.useList();
+  const [approvalRequests] = ApprovalRequest.useList();
+
+  return (
+    <PendingApprovalsCapability
+      clusterApprovalRequests={clusterApprovalRequests}
+      approvalRequests={approvalRequests}
+    />
+  );
+}
+
 // ─── Routes ───────────────────────────────────────────────────────────────────
 
 registerRoute({
@@ -1786,4 +1834,12 @@ registerRoute({
   name: 'fleet-rollout-run-details-namespace',
   exact: true,
   component: RolloutRunDetails,
+});
+
+registerRoute({
+  path: '/fleet/pending-approvals',
+  sidebar: 'fleet-pending-approvals',
+  name: 'fleet-pending-approvals',
+  exact: true,
+  component: PendingApprovals,
 });
