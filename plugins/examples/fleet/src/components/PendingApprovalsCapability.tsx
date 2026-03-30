@@ -15,18 +15,20 @@
  */
 
 import { Icon } from '@iconify/react';
-import {
-  ApiProxy,
-  Link,
-  ResourceListView,
-  SectionBox,
-} from '@kinvolk/headlamp-plugin/lib/CommonComponents';
+import { ApiProxy } from '@kinvolk/headlamp-plugin/lib';
+import { Link, ResourceListView, SectionBox } from '@kinvolk/headlamp-plugin/lib/CommonComponents';
 import Box from '@mui/material/Box';
+import Button from '@mui/material/Button';
+import Dialog from '@mui/material/Dialog';
+import DialogActions from '@mui/material/DialogActions';
+import DialogContent from '@mui/material/DialogContent';
+import DialogTitle from '@mui/material/DialogTitle';
 import FormControlLabel from '@mui/material/FormControlLabel';
 import ListItemIcon from '@mui/material/ListItemIcon';
 import ListItemText from '@mui/material/ListItemText';
 import MenuItem from '@mui/material/MenuItem';
 import Switch from '@mui/material/Switch';
+import TextField from '@mui/material/TextField';
 import Typography from '@mui/material/Typography';
 import { useState } from 'react';
 
@@ -89,15 +91,16 @@ function getApprovalStatusApiPath(item: any): string {
   return `${resourcePath}/status`;
 }
 
-async function approveApprovalRequest(item: any): Promise<void> {
+async function approveApprovalRequest(item: any, message: string): Promise<void> {
   const statusPath = getApprovalStatusApiPath(item);
   const lastTransitionTime = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
+  const conditionMessage = message.trim() || 'ApprovedByUser';
   const patchBody = {
     status: {
       conditions: [
         {
           lastTransitionTime,
-          message: 'ApprovedByUser',
+          message: conditionMessage,
           observedGeneration: 1,
           reason: 'ApprovedByUser',
           status: 'True',
@@ -117,6 +120,10 @@ async function approveApprovalRequest(item: any): Promise<void> {
 
 export function PendingApprovalsCapability({ clusterApprovalRequests, approvalRequests }: Props) {
   const [showApproved, setShowApproved] = useState(false);
+  const [approvalToApprove, setApprovalToApprove] = useState<any | null>(null);
+  const [approvalMessage, setApprovalMessage] = useState('');
+  const [isSubmittingApproval, setIsSubmittingApproval] = useState(false);
+  const [approvalFormError, setApprovalFormError] = useState('');
 
   // Combine cluster and namespace-scoped approval requests
   const allApprovals =
@@ -129,25 +136,55 @@ export function PendingApprovalsCapability({ clusterApprovalRequests, approvalRe
     ? allApprovals.filter(item => showApproved || !isApprovalApproved(item))
     : null;
 
+  const closeApprovalForm = () => {
+    if (isSubmittingApproval) {
+      return;
+    }
+
+    setApprovalToApprove(null);
+    setApprovalMessage('');
+    setApprovalFormError('');
+  };
+
+  const submitApprovalForm = async () => {
+    if (!approvalToApprove) {
+      return;
+    }
+
+    setApprovalFormError('');
+    setIsSubmittingApproval(true);
+
+    try {
+      await approveApprovalRequest(approvalToApprove, approvalMessage);
+      window.location.reload();
+    } catch (error: any) {
+      const statusPath = getApprovalStatusApiPath(approvalToApprove);
+      const clusterName = approvalToApprove?.cluster ?? 'current';
+      const errorMessage =
+        error?.message ||
+        `Unable to approve ${String(approvalToApprove?.getName?.() ?? 'request')}.`;
+
+      setApprovalFormError(`${errorMessage}\nPath: ${statusPath}\nCluster: ${String(clusterName)}`);
+    } finally {
+      setIsSubmittingApproval(false);
+    }
+  };
+
   return (
     <>
-      <SectionBox
-        title="Pending Approvals"
-        headerAction={
-          <Box display="flex" alignItems="center">
-            <FormControlLabel
-              control={
-                <Switch
-                  checked={showApproved}
-                  onChange={e => setShowApproved(e.target.checked)}
-                  size="small"
-                />
-              }
-              label="Show Approved"
-            />
-          </Box>
-        }
-      >
+      <SectionBox title="Pending Approvals">
+        <Box display="flex" alignItems="center" justifyContent="flex-end" mb={1}>
+          <FormControlLabel
+            control={
+              <Switch
+                checked={showApproved}
+                onChange={e => setShowApproved(e.target.checked)}
+                size="small"
+              />
+            }
+            label="Show Approved"
+          />
+        </Box>
         {!allApprovals ? (
           <Typography>Loading approval requests...</Typography>
         ) : allApprovals.length === 0 ? (
@@ -160,6 +197,7 @@ export function PendingApprovalsCapability({ clusterApprovalRequests, approvalRe
           </Typography>
         ) : (
           <ResourceListView
+            title=""
             data={filteredApprovals}
             columns={[
               {
@@ -257,29 +295,15 @@ export function PendingApprovalsCapability({ clusterApprovalRequests, approvalRe
                 action: ({ item, closeMenu }: { item: any; closeMenu: () => void }) => {
                   const canApprove = !isApprovalApproved(item);
 
-                  const handleApprove = async () => {
+                  const openApproveForm = () => {
                     closeMenu();
-                    try {
-                      await approveApprovalRequest(item);
-                      window.location.reload();
-                    } catch (error: any) {
-                      const statusPath = getApprovalStatusApiPath(item);
-                      const clusterName = item?.cluster ?? 'current';
-                      const errorMessage =
-                        error?.message ||
-                        `Unable to approve ${String(item?.getName?.() ?? 'request')}.`;
-                      window.alert(
-                        `${errorMessage}\nPath: ${statusPath}\nCluster: ${String(clusterName)}`
-                      );
-                    }
+                    setApprovalFormError('');
+                    setApprovalMessage('');
+                    setApprovalToApprove(item);
                   };
 
                   return (
-                    <MenuItem
-                      key="approve"
-                      disabled={!canApprove}
-                      onClick={() => void handleApprove()}
-                    >
+                    <MenuItem key="approve" disabled={!canApprove} onClick={openApproveForm}>
                       <ListItemIcon>
                         <Icon icon="mdi:account-check-outline" />
                       </ListItemIcon>
@@ -292,6 +316,55 @@ export function PendingApprovalsCapability({ clusterApprovalRequests, approvalRe
           />
         )}
       </SectionBox>
+
+      <Dialog open={Boolean(approvalToApprove)} onClose={closeApprovalForm} fullWidth maxWidth="sm">
+        <DialogTitle>Approve Pending Approval</DialogTitle>
+        <DialogContent>
+          <Box display="flex" flexDirection="column" gap={1.25} mt={0.5}>
+            <Typography variant="body2">
+              <strong>Approval:</strong> {approvalToApprove?.getName?.() ?? '-'}
+            </Typography>
+            <Typography variant="body2">
+              <strong>Update Run:</strong>{' '}
+              {approvalToApprove ? getApprovalUpdateRunName(approvalToApprove) : '-'}
+            </Typography>
+            <Typography variant="body2">
+              <strong>Stage:</strong>{' '}
+              {approvalToApprove ? getApprovalStage(approvalToApprove) : '-'}
+            </Typography>
+            <Typography variant="body2">
+              <strong>Position:</strong>{' '}
+              {approvalToApprove ? getApprovalPosition(approvalToApprove) : '-'}
+            </Typography>
+            <TextField
+              label="Message"
+              placeholder="Enter an approval message"
+              value={approvalMessage}
+              onChange={e => setApprovalMessage(e.target.value)}
+              multiline
+              minRows={3}
+              fullWidth
+            />
+            {approvalFormError && (
+              <Typography color="error" variant="body2" sx={{ whiteSpace: 'pre-line' }}>
+                {approvalFormError}
+              </Typography>
+            )}
+          </Box>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={closeApprovalForm} disabled={isSubmittingApproval}>
+            Cancel
+          </Button>
+          <Button
+            onClick={() => void submitApprovalForm()}
+            disabled={isSubmittingApproval || !approvalToApprove}
+            variant="contained"
+          >
+            Approve
+          </Button>
+        </DialogActions>
+      </Dialog>
     </>
   );
 }
