@@ -839,6 +839,20 @@ function getRolloutRunStatusDisplay(item: any): {
     };
   }
 
+  if (
+    String(lastCondition?.reason ?? '') === 'UpdateRunStuck' &&
+    String(lastCondition?.type ?? '') === 'Progressing' &&
+    String(lastCondition?.status ?? '') === 'False'
+  ) {
+    const message = lastCondition?.message ?? 'Update run is blocked';
+
+    return {
+      label: 'Blocked',
+      status: 'error',
+      detailedStatus: message,
+    };
+  }
+
   const initializedCondition = Array.isArray(conditions)
     ? conditions.find((condition: any) => condition?.type === 'Initialized')
     : null;
@@ -908,6 +922,7 @@ function makeRolloutRunStatusLabel(item: any) {
   }
 
   const isWaiting = statusDisplay.label === 'Waiting';
+  const isBlocked = statusDisplay.label === 'Blocked';
 
   return (
     <Box display="flex" alignItems="center" gap={1}>
@@ -932,6 +947,26 @@ function makeRolloutRunStatusLabel(item: any) {
             >
               <Icon aria-label="hidden" icon="mdi:timer-sand" width="1.1rem" height="1.1rem" />
               Waiting
+            </Box>
+          ) : isBlocked ? (
+            <Box
+              component="span"
+              sx={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '4px',
+                px: '8px',
+                py: '4px',
+                borderRadius: '4px',
+                border: '1px solid transparent',
+                backgroundColor: '#e65100',
+                color: '#fff',
+                fontSize: '0.875rem',
+                fontWeight: 600,
+              }}
+            >
+              <Icon aria-label="hidden" icon="mdi:alert" width="1.1rem" height="1.1rem" />
+              Blocked
             </Box>
           ) : (
             <StatusLabel status={statusDisplay.status}>
@@ -1480,6 +1515,7 @@ function RolloutRunDetails() {
       clusterStagedUpdateRunClass={ClusterStagedUpdateRun}
       getRolloutRunScope={getRolloutRunScope}
       getCurrentStageName={getCurrentStageName}
+      getRolloutRunStatusDisplay={getRolloutRunStatusDisplay}
       makeRolloutRunStatusLabel={makeRolloutRunStatusLabel}
       formatObjectSummary={formatObjectSummary}
       getStageStatusRows={getStageStatusRows}

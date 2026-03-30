@@ -50,6 +50,11 @@ type Props = {
   clusterStagedUpdateRunClass: any;
   getRolloutRunScope: (item: any) => 'Cluster' | 'Namespace';
   getCurrentStageName: (item: any) => string;
+  getRolloutRunStatusDisplay: (item: any) => {
+    label: string;
+    status: 'success' | 'warning' | 'error' | '';
+    detailedStatus: string;
+  };
   makeRolloutRunStatusLabel: (item: any) => React.ReactNode;
   formatObjectSummary: (data: Record<string, any> | undefined) => string;
   getStageStatusRows: (item: any) => StageStatusRow[];
@@ -66,6 +71,7 @@ export function RolloutRunDetailsCapability({
   clusterStagedUpdateRunClass,
   getRolloutRunScope,
   getCurrentStageName,
+  getRolloutRunStatusDisplay,
   makeRolloutRunStatusLabel,
   formatObjectSummary,
   getStageStatusRows,
@@ -112,7 +118,11 @@ export function RolloutRunDetailsCapability({
           },
           {
             name: 'Current Stage',
-            value: getCurrentStageName(item),
+            value:
+              getRolloutRunStatusDisplay(item).label === 'Completed' ||
+              getRolloutRunStatusDisplay(item).label === 'Not Initialized'
+                ? '-'
+                : getCurrentStageName(item),
           },
           {
             name: 'Status',

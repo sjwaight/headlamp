@@ -203,6 +203,16 @@ export function RolloutRunsCapability({
           {
             label: 'Current Stage',
             getValue: (item: any) => getCurrentStageName(item),
+            render: (item: any) => {
+              const statusDisplay = getRolloutRunStatusDisplay(item);
+              if (
+                statusDisplay.label === 'Completed' ||
+                statusDisplay.label === 'Not Initialized'
+              ) {
+                return '-';
+              }
+              return getCurrentStageName(item);
+            },
           },
           {
             label: 'Status',
@@ -237,7 +247,11 @@ export function RolloutRunsCapability({
             id: 'start',
             action: ({ item, closeMenu }: { item: any; closeMenu: () => void }) => {
               const runName = item.getName();
-              const isCompleted = getRolloutRunStatusDisplay(item).label === 'Completed';
+              const statusLabel = getRolloutRunStatusDisplay(item).label;
+              const isCompleted =
+                statusLabel === 'Completed' ||
+                statusLabel === 'Not Initialized' ||
+                statusLabel === 'Blocked';
 
               const handleStateUpdate = async () => {
                 closeMenu();
@@ -268,7 +282,11 @@ export function RolloutRunsCapability({
             id: 'stop',
             action: ({ item, closeMenu }: { item: any; closeMenu: () => void }) => {
               const runName = item.getName();
-              const isCompleted = getRolloutRunStatusDisplay(item).label === 'Completed';
+              const statusLabel = getRolloutRunStatusDisplay(item).label;
+              const isCompleted =
+                statusLabel === 'Completed' ||
+                statusLabel === 'Not Initialized' ||
+                statusLabel === 'Blocked';
 
               const handleStateUpdate = async () => {
                 closeMenu();
@@ -299,7 +317,11 @@ export function RolloutRunsCapability({
             id: 'approve',
             action: ({ item, closeMenu }: { item: any; closeMenu: () => void }) => {
               const approvalInfo = getApprovalWaitingStage(item);
-              const canApprove = approvalInfo !== null;
+              const statusLabel = getRolloutRunStatusDisplay(item).label;
+              const canApprove =
+                approvalInfo !== null &&
+                statusLabel !== 'Not Initialized' &&
+                statusLabel !== 'Blocked';
 
               const handleOpenApprovalForm = () => {
                 closeMenu();
