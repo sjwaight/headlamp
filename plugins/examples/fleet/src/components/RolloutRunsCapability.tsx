@@ -26,7 +26,9 @@ import ListItemIcon from '@mui/material/ListItemIcon';
 import ListItemText from '@mui/material/ListItemText';
 import MenuItem from '@mui/material/MenuItem';
 import Typography from '@mui/material/Typography';
+import { useState } from 'react';
 import { useLocation } from 'react-router-dom';
+import { ApprovalDialog } from './ApprovalDialog';
 
 type StageStatusRow = {
   waitingFor: 'Approval' | 'TimedWait' | '';
@@ -46,7 +48,7 @@ type Props = {
   makeRolloutRunStatusLabel: (item: any) => React.ReactNode;
   getStageStatusRows: (item: any) => StageStatusRow[];
   updateRolloutRunState: (item: any, nextState: 'Run' | 'Stop') => Promise<void>;
-  approveStageRun: (item: any) => Promise<void>;
+  approveStageRun: (item: any, message?: string) => Promise<void>;
   getApprovalWaitingStage: (item: any) => { stageName: string; approvalRequestName: string } | null;
   getRolloutRunStatusApiPath: (item: any) => string;
 };
@@ -68,6 +70,10 @@ export function RolloutRunsCapability({
   const searchParams = new URLSearchParams(location.search);
   const strategyFilter = searchParams.get('strategy') || '';
   const placementFilter = searchParams.get('placement') || '';
+
+  const [rolloutToApprove, setRolloutToApprove] = useState<any | null>(null);
+  const [isSubmittingApproval, setIsSubmittingApproval] = useState(false);
+  const [approvalFormError, setApprovalFormError] = useState('');
 
   const allRuns =
     clusterRolloutRuns && rolloutRuns ? [...clusterRolloutRuns, ...rolloutRuns] : null;
@@ -295,23 +301,14 @@ export function RolloutRunsCapability({
               const approvalInfo = getApprovalWaitingStage(item);
               const canApprove = approvalInfo !== null;
 
-              const handleApprove = async () => {
+              const handleOpenApprovalForm = () => {
                 closeMenu();
-                try {
-                  await approveStageRun(item);
-                  window.location.reload();
-                } catch (error: any) {
-                  const statusPath = getRolloutRunStatusApiPath(item);
-                  const clusterName = item?.cluster ?? 'current';
-                  const errorMessage = error?.message || 'Unable to approve stage.';
-                  window.alert(
-                    `${errorMessage}\nPath: ${statusPath}\nCluster: ${String(clusterName)}`
-                  );
-                }
+                setApprovalFormError('');
+                setRolloutToApprove(item);
               };
 
               return (
-                <MenuItem key="approve" disabled={!canApprove} onClick={() => void handleApprove()}>
+                <MenuItem key="approve" disabled={!canApprove} onClick={handleOpenApprovalForm}>
                   <ListItemIcon>
                     <Icon icon="mdi:account-check-outline" />
                   </ListItemIcon>
@@ -322,6 +319,51 @@ export function RolloutRunsCapability({
           },
         ]}
       />
+
+      {rolloutToApprove && (
+        <ApprovalDialog
+          open={Boolean(rolloutToApprove)}
+          onClose={() => {
+            if (!isSubmittingApproval) {
+              setRolloutToApprove(null);
+              setApprovalFormError('');
+            }
+          }}
+          onSubmit={async (message: string) => {
+            if (!rolloutToApprove) return;
+
+            setApprovalFormError('');
+            setIsSubmittingApproval(true);
+
+            try {
+              await approveStageRun(rolloutToApprove, message);
+              window.location.reload();
+            } catch (error: any) {
+              const statusPath = getRolloutRunStatusApiPath(rolloutToApprove);
+              const clusterName = rolloutToApprove?.cluster ?? 'current';
+              const errorMessage = error?.message || 'Unable to approve stage.';
+
+              setApprovalFormError(
+                `${errorMessage}\nPath: ${statusPath}\nCluster: ${String(clusterName)}`
+              );
+            } finally {
+              setIsSubmittingApproval(false);
+            }
+          }}
+          details={
+            rolloutToApprove
+              ? {
+                  name: rolloutToApprove.getName() ?? '',
+                  stage: getCurrentStageName(rolloutToApprove) ?? undefined,
+                  updateRun: rolloutToApprove.getName() ?? undefined,
+                }
+              : null
+          }
+          isSubmitting={isSubmittingApproval}
+          error={approvalFormError}
+          title="Approve Stage"
+        />
+      )}
     </>
   );
 }

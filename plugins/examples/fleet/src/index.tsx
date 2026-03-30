@@ -996,18 +996,19 @@ function getApprovalWaitingStage(
   return null;
 }
 
-async function approveStageRun(item: any): Promise<void> {
+async function approveStageRun(item: any, message?: string): Promise<void> {
   const approvalInfo = getApprovalWaitingStage(item);
   if (!approvalInfo) {
     throw new Error('No stage is currently waiting for approval.');
   }
-  await approveStageByName(item, approvalInfo.stageName, approvalInfo.approvalRequestName);
+  await approveStageByName(item, approvalInfo.stageName, approvalInfo.approvalRequestName, message);
 }
 
 async function approveStageByName(
   item: any,
   stageName: string,
-  approvalRequestName: string
+  approvalRequestName: string,
+  message?: string
 ): Promise<void> {
   const namespace = item?.getNamespace?.();
   const cluster = item?.cluster ?? null;
@@ -1021,12 +1022,13 @@ async function approveStageByName(
   const statusPath = `${resourcePath}/status`;
 
   const lastTransitionTime = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z');
+  const conditionMessage = message?.trim() || 'ApprovedByUser';
   const patchBody = {
     status: {
       conditions: [
         {
           lastTransitionTime,
-          message: 'ApprovedByUser',
+          message: conditionMessage,
           observedGeneration: 1,
           reason: 'ApprovedByUser',
           status: 'True',

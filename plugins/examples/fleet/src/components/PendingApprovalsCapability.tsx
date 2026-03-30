@@ -18,19 +18,14 @@ import { Icon } from '@iconify/react';
 import { ApiProxy } from '@kinvolk/headlamp-plugin/lib';
 import { Link, ResourceListView, SectionBox } from '@kinvolk/headlamp-plugin/lib/CommonComponents';
 import Box from '@mui/material/Box';
-import Button from '@mui/material/Button';
-import Dialog from '@mui/material/Dialog';
-import DialogActions from '@mui/material/DialogActions';
-import DialogContent from '@mui/material/DialogContent';
-import DialogTitle from '@mui/material/DialogTitle';
 import FormControlLabel from '@mui/material/FormControlLabel';
 import ListItemIcon from '@mui/material/ListItemIcon';
 import ListItemText from '@mui/material/ListItemText';
 import MenuItem from '@mui/material/MenuItem';
 import Switch from '@mui/material/Switch';
-import TextField from '@mui/material/TextField';
 import Typography from '@mui/material/Typography';
 import { useState } from 'react';
+import { ApprovalDialog } from './ApprovalDialog';
 
 type Props = {
   clusterApprovalRequests: any[] | null;
@@ -121,7 +116,6 @@ async function approveApprovalRequest(item: any, message: string): Promise<void>
 export function PendingApprovalsCapability({ clusterApprovalRequests, approvalRequests }: Props) {
   const [showApproved, setShowApproved] = useState(false);
   const [approvalToApprove, setApprovalToApprove] = useState<any | null>(null);
-  const [approvalMessage, setApprovalMessage] = useState('');
   const [isSubmittingApproval, setIsSubmittingApproval] = useState(false);
   const [approvalFormError, setApprovalFormError] = useState('');
 
@@ -142,11 +136,10 @@ export function PendingApprovalsCapability({ clusterApprovalRequests, approvalRe
     }
 
     setApprovalToApprove(null);
-    setApprovalMessage('');
     setApprovalFormError('');
   };
 
-  const submitApprovalForm = async () => {
+  const handleApprovalSubmit = async (message: string) => {
     if (!approvalToApprove) {
       return;
     }
@@ -155,7 +148,7 @@ export function PendingApprovalsCapability({ clusterApprovalRequests, approvalRe
     setIsSubmittingApproval(true);
 
     try {
-      await approveApprovalRequest(approvalToApprove, approvalMessage);
+      await approveApprovalRequest(approvalToApprove, message);
       window.location.reload();
     } catch (error: any) {
       const statusPath = getApprovalStatusApiPath(approvalToApprove);
@@ -298,7 +291,6 @@ export function PendingApprovalsCapability({ clusterApprovalRequests, approvalRe
                   const openApproveForm = () => {
                     closeMenu();
                     setApprovalFormError('');
-                    setApprovalMessage('');
                     setApprovalToApprove(item);
                   };
 
@@ -317,54 +309,20 @@ export function PendingApprovalsCapability({ clusterApprovalRequests, approvalRe
         )}
       </SectionBox>
 
-      <Dialog open={Boolean(approvalToApprove)} onClose={closeApprovalForm} fullWidth maxWidth="sm">
-        <DialogTitle>Approve Pending Approval</DialogTitle>
-        <DialogContent>
-          <Box display="flex" flexDirection="column" gap={1.25} mt={0.5}>
-            <Typography variant="body2">
-              <strong>Approval:</strong> {approvalToApprove?.getName?.() ?? '-'}
-            </Typography>
-            <Typography variant="body2">
-              <strong>Update Run:</strong>{' '}
-              {approvalToApprove ? getApprovalUpdateRunName(approvalToApprove) : '-'}
-            </Typography>
-            <Typography variant="body2">
-              <strong>Stage:</strong>{' '}
-              {approvalToApprove ? getApprovalStage(approvalToApprove) : '-'}
-            </Typography>
-            <Typography variant="body2">
-              <strong>Position:</strong>{' '}
-              {approvalToApprove ? getApprovalPosition(approvalToApprove) : '-'}
-            </Typography>
-            <TextField
-              label="Message"
-              placeholder="Enter an approval message"
-              value={approvalMessage}
-              onChange={e => setApprovalMessage(e.target.value)}
-              multiline
-              minRows={3}
-              fullWidth
-            />
-            {approvalFormError && (
-              <Typography color="error" variant="body2" sx={{ whiteSpace: 'pre-line' }}>
-                {approvalFormError}
-              </Typography>
-            )}
-          </Box>
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={closeApprovalForm} disabled={isSubmittingApproval}>
-            Cancel
-          </Button>
-          <Button
-            onClick={() => void submitApprovalForm()}
-            disabled={isSubmittingApproval || !approvalToApprove}
-            variant="contained"
-          >
-            Approve
-          </Button>
-        </DialogActions>
-      </Dialog>
+      <ApprovalDialog
+        open={Boolean(approvalToApprove)}
+        onClose={closeApprovalForm}
+        onSubmit={handleApprovalSubmit}
+        details={{
+          name: approvalToApprove?.getName?.() ?? '',
+          updateRun: approvalToApprove ? getApprovalUpdateRunName(approvalToApprove) : undefined,
+          stage: approvalToApprove ? getApprovalStage(approvalToApprove) : undefined,
+          position: approvalToApprove ? getApprovalPosition(approvalToApprove) : undefined,
+        }}
+        isSubmitting={isSubmittingApproval}
+        error={approvalFormError}
+        title="Approve Pending Approval"
+      />
     </>
   );
 }
