@@ -499,8 +499,6 @@ function PlacementPolicies() {
       getPlacementScope={getPlacementScope}
       getPlacementPolicyType={getPlacementPolicyType}
       getPlacementStrategyType={getPlacementStrategyType}
-      getPlacementStatusDisplay={getPlacementStatusDisplay}
-      makePlacementStatusLabel={makePlacementStatusLabel}
     />
   );
 }
