@@ -1,7 +1,7 @@
 {
-  "name": "fleet",
-  "version": "0.1.0",
-  "description": "Headlamp plugin for Kubernetes Fleet management: member clusters, staged resources, placement policies, rollout strategies, and rollout runs.",
+  "name": "kubefleet-manager",
+  "version": "0.2.0",
+  "description": "Headlamp plugin for KubeFleet multi-cluster management: member clusters, staged resources, placement policies, rollout strategies, and rollout runs.",
   "scripts": {
     "start": "headlamp-plugin start",
     "build": "headlamp-plugin build",
@@ -14,10 +14,22 @@
     "storybook-build": "headlamp-plugin storybook-build",
     "i18n": "headlamp-plugin i18n"
   },
-  "keywords": ["headlamp", "headlamp-plugin", "kubernetes", "plugins", "fleet"],
+  "keywords": [
+    "headlamp",
+    "headlamp-plugin",
+    "kubernetes",
+    "plugins",
+    "fleet",
+    "multi-cluster",
+    "kubefleet"
+  ],
   "prettier": "@headlamp-k8s/eslint-config/prettier-config",
   "eslintConfig": {
-    "extends": ["@headlamp-k8s", "prettier", "plugin:jsx-a11y/recommended"]
+    "extends": [
+      "@headlamp-k8s",
+      "prettier",
+      "plugin:jsx-a11y/recommended"
+    ]
   },
   "devDependencies": {
     "@kinvolk/headlamp-plugin": "^0.13.0"
